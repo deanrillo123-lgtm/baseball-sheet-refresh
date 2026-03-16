@@ -80,7 +80,7 @@ normalize_score <- function(value, min_val = 0, max_val = 100) {
   return(result)
 }
 
-# AGE VS LEVEL CALCULATION
+# AGE VS LEVEL CALCULATION - VECTORIZED
 calculate_age_diff_score <- function(age, level) {
   level_avg_ages <- list(
     "AAA" = 26,
@@ -91,25 +91,40 @@ calculate_age_diff_score <- function(age, level) {
     "R" = 21
   )
   
-  target_age <- level_avg_ages[[level]]
-  if (is.na(target_age)) target_age <- 24
+  # Handle vectors
+  result <- rep(NA_real_, length(age))
   
-  age_diff <- age - target_age
+  for (i in seq_along(age)) {
+    if (is.na(age[i]) || is.na(level[i])) {
+      result[i] <- 50
+      next
+    }
+    
+    # Trim and uppercase the level to match keys
+    clean_level <- toupper(trimws(as.character(level[i])))
+    
+    target_age <- level_avg_ages[[clean_level]]
+    if (is.null(target_age)) {
+      target_age <- 24  # default
+    }
+    
+    age_diff <- age[i] - target_age
+    
+    score <- case_when(
+      age_diff <= -3 ~ 95,
+      age_diff == -2 ~ 85,
+      age_diff == -1 ~ 70,
+      age_diff == 0 ~ 50,
+      age_diff == 1 ~ 40,
+      age_diff == 2 ~ 25,
+      age_diff >= 3 ~ 5,
+      TRUE ~ 50
+    )
+    
+    result[i] <- score
+  }
   
-  if (is.na(age_diff)) return(50)
-  
-  score <- case_when(
-    age_diff <= -3 ~ 95,
-    age_diff == -2 ~ 85,
-    age_diff == -1 ~ 70,
-    age_diff == 0 ~ 50,
-    age_diff == 1 ~ 40,
-    age_diff == 2 ~ 25,
-    age_diff >= 3 ~ 5,
-    TRUE ~ 50
-  )
-  
-  return(score)
+  return(result)
 }
 
 # ROBUST DATA FETCHERS
