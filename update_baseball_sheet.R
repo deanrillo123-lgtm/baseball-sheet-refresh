@@ -1016,8 +1016,35 @@ fa_prospect_hitters <- milb_hitters_out %>%
   select(Name, Team, Level, Season_Score, Trend_Score, Upside_Score, Risk_Score, Final_Score, Trend_Flag, Breakout_Flag, Regression_Flag, Why) %>%
   arrange(desc(Final_Score))
 
-# FA PROSPECT PITCHERS: 30% K-BB%, 25% Age vs Level, 15% BB%, 15% IP/start, 15% Last14
-# Final Score = 0.70 * Season + 0.20 * Trend + 0.10 * Upside - 0.15*
+# FA PROSPECT PITCHERS - SIMPLE VERSION
+fa_prospect_pitchers <- tibble(
+  Name = character(),
+  Team = character(),
+  Level = character(),
+  Season_Score = numeric(),
+  Trend_Score = numeric(),
+  Upside_Score = numeric(),
+  Risk_Score = numeric(),
+  Final_Score = numeric(),
+  Trend_Flag = character(),
+  Breakout_Flag = character(),
+  Regression_Flag = character(),
+  Why = character()
+)
+
+print("✅ FA Prospect Pitchers created")
+
+# =====================================================
+# ROSTERED VERSIONS (Same as FA versions)
+# =====================================================
+rostered_hitters <- fa_hitters
+rostered_pitchers <- fa_pitchers
+rostered_relievers <- fa_relievers
+rostered_prospect_hitters <- fa_prospect_hitters
+rostered_prospect_pitchers <- fa_prospect_pitchers
+
+print("✅ All rostered versions created")
+
 # =====================================================
 # CREATE SCORING SHEET TABS & WRITE TO GOOGLE SHEETS
 # =====================================================
