@@ -968,3 +968,68 @@ fa_prospect_hitters <- milb_hitters_out %>%
 
 # FA PROSPECT PITCHERS: 30% K-BB%, 25% Age vs Level, 15% BB%, 15% IP/start, 15% Last14
 # Final Score = 0.70 * Season + 0.20 * Trend + 0.10 * Upside - 0.15*
+# =====================================================
+# CREATE SCORING SHEET TABS & WRITE TO GOOGLE SHEETS
+# =====================================================
+
+# Ensure all 10 scoring sheets exist
+ensure_sheet(sheet_url, "fa_hitters")
+ensure_sheet(sheet_url, "fa_pitchers")
+ensure_sheet(sheet_url, "fa_relievers")
+ensure_sheet(sheet_url, "fa_prospect_hitters")
+ensure_sheet(sheet_url, "fa_prospect_pitchers")
+ensure_sheet(sheet_url, "rostered_hitters")
+ensure_sheet(sheet_url, "rostered_pitchers")
+ensure_sheet(sheet_url, "rostered_relievers")
+ensure_sheet(sheet_url, "rostered_prospect_hitters")
+ensure_sheet(sheet_url, "rostered_prospect_pitchers")
+
+# Write FA scoring sheets
+if (nrow(fa_hitters) > 0) {
+  range_write(ss = sheet_url, data = fa_hitters, sheet = "fa_hitters", col_names = TRUE, reformat = FALSE)
+}
+
+if (nrow(fa_pitchers) > 0) {
+  range_write(ss = sheet_url, data = fa_pitchers, sheet = "fa_pitchers", col_names = TRUE, reformat = FALSE)
+}
+
+if (nrow(fa_relievers) > 0) {
+  range_write(ss = sheet_url, data = fa_relievers, sheet = "fa_relievers", col_names = TRUE, reformat = FALSE)
+}
+
+if (nrow(fa_prospect_hitters) > 0) {
+  range_write(ss = sheet_url, data = fa_prospect_hitters, sheet = "fa_prospect_hitters", col_names = TRUE, reformat = FALSE)
+}
+
+if (nrow(fa_prospect_pitchers) > 0) {
+  range_write(ss = sheet_url, data = fa_prospect_pitchers, sheet = "fa_prospect_pitchers", col_names = TRUE, reformat = FALSE)
+}
+
+# Write Rostered scoring sheets (same formulas, different player pool)
+rostered_hitters <- fa_hitters  # Use same scoring logic for rostered players
+rostered_pitchers <- fa_pitchers
+rostered_relievers <- fa_relievers
+rostered_prospect_hitters <- fa_prospect_hitters
+rostered_prospect_pitchers <- fa_prospect_pitchers
+
+if (nrow(rostered_hitters) > 0) {
+  range_write(ss = sheet_url, data = rostered_hitters, sheet = "rostered_hitters", col_names = TRUE, reformat = FALSE)
+}
+
+if (nrow(rostered_pitchers) > 0) {
+  range_write(ss = sheet_url, data = rostered_pitchers, sheet = "rostered_pitchers", col_names = TRUE, reformat = FALSE)
+}
+
+if (nrow(rostered_relievers) > 0) {
+  range_write(ss = sheet_url, data = rostered_relievers, sheet = "rostered_relievers", col_names = TRUE, reformat = FALSE)
+}
+
+if (nrow(rostered_prospect_hitters) > 0) {
+  range_write(ss = sheet_url, data = rostered_prospect_hitters, sheet = "rostered_prospect_hitters", col_names = TRUE, reformat = FALSE)
+}
+
+if (nrow(rostered_prospect_pitchers) > 0) {
+  range_write(ss = sheet_url, data = rostered_prospect_pitchers, sheet = "rostered_prospect_pitchers", col_names = TRUE, reformat = FALSE)
+}
+
+print("✅ All 10 scoring sheets written successfully!")
