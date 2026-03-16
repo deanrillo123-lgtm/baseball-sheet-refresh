@@ -184,6 +184,17 @@ calculate_prospect_pitcher_risk <- function(command_risk = 0, role_risk = 0, age
 
 # FLAG GENERATION
 generate_flags <- function(season_score, trend_score) {
+  # Handle NAs
+  if (is.na(season_score) || is.na(trend_score)) {
+    return(list(
+      trend_flag = "",
+      breakout_flag = "",
+      breakout_watch = "",
+      regression_flag = "",
+      why = "Insufficient data"
+    ))
+  }
+  
   trend_diff <- trend_score - season_score
   
   trend_flag <- if (trend_diff >= 20) "🔥" 
