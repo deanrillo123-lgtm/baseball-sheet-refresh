@@ -1,15 +1,15 @@
-name: Daily Test Tab Refresh
+name: Weekly Free Agent Helper Refresh
 
 on:
   workflow_dispatch:
   schedule:
-    # 1 AM Chicago time during baseball season (CDT, Apr-Oct) = 6 AM UTC.
-    # During off-season (CST, Nov-Mar) this runs at midnight Chicago; update
-    # to "0 7 * * *" if off-season daily refreshes are also needed at 1 AM.
-    - cron: "0 6 * * *"
+    # Sunday 2 AM Chicago time during baseball season (CDT, Apr-Oct) = Sunday 7 AM UTC.
+    # During off-season (CST, Nov-Mar) this runs at 1 AM Chicago; update to
+    # "0 8 * * 0" if year-round 2 AM Chicago consistency is required.
+    - cron: "0 7 * * 0"
 
 jobs:
-  refresh:
+  fa-refresh:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -32,10 +32,7 @@ jobs:
             any::purrr
             any::readr
             any::tibble
-            any::rvest
-            any::xml2
             any::stringr
-            any::janitor
 
       - name: Write Google auth JSON
         run: |
@@ -43,5 +40,5 @@ jobs:
           ${{ secrets.GS4_SERVICE_ACCOUNT_JSON }}
           EOF
 
-      - name: Run daily Test tab update script
-        run: Rscript update_baseball_sheet.R
+      - name: Run Free Agent Helper update script
+        run: Rscript update_fa_helper.R
