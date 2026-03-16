@@ -1,6 +1,8 @@
 library(baseballr)
 library(dplyr)
 library(googlesheets4)
+library(httr)
+library(jsonlite)
 library(lubridate)
 library(purrr)
 library(readr)
@@ -167,74 +169,188 @@ scrape_fangraphs_fv <- function(board_year) {
     board_year,
     "-prospect-list?type=0"
   )
-  
+
   message(paste("Scraping FanGraphs FV from:", board_url))
-  
-  page <- read_html(board_url)
-  
-  tables <- page %>%
-    html_elements("table") %>%
-    html_table(fill = TRUE)
-  
-  if (length(tables) == 0) {
-    warning("No tables found on FanGraphs Board page.")
-    return(tibble())
+
+  # Shared browser-like headers to avoid being blocked
+  browser_headers <- httr::add_headers(
+    `User-Agent`      = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    `Accept`          = "application/json, text/html, */*",
+    `Accept-Language` = "en-US,en;q=0.9",
+    `Referer`         = "https://www.fangraphs.com/"
+  )
+
+  # Helper: given a data frame, find Name/Org/FV columns and return a tidy tibble.
+  extract_fv_cols <- function(df) {
+    df <- janitor::clean_names(df)
+    nm <- names(df)
+    message(paste("  Columns available:", paste(nm, collapse = ", ")))
+
+    name_col <- nm[str_detect(nm, regex("^name$|player|prospect", ignore_case = TRUE))]
+    org_col  <- nm[str_detect(nm, regex("^org$|organization|team", ignore_case = TRUE))]
+    fv_col   <- nm[str_detect(nm, regex("^fv$|future.?value|grade|rating", ignore_case = TRUE))]
+
+    message(paste("  Name col candidates:", paste(name_col, collapse = ", ")))
+    message(paste("  Org  col candidates:", paste(org_col,  collapse = ", ")))
+    message(paste("  FV   col candidates:", paste(fv_col,   collapse = ", ")))
+
+    if (length(name_col) == 0) {
+      message("  Could not find Name column — skipping this table/result.")
+      return(NULL)
+    }
+    if (length(fv_col) == 0) {
+      message("  Could not find FV column — skipping this table/result.")
+      return(NULL)
+    }
+
+    name_col <- name_col[1]
+    org_col  <- if (length(org_col) > 0) org_col[1] else NA_character_
+    fv_col   <- fv_col[1]
+
+    out <- df %>%
+      transmute(
+        fg_name = safe_trim(.data[[name_col]]),
+        fg_org  = if (!is.na(org_col)) safe_trim(.data[[org_col]]) else NA_character_,
+        FV      = safe_trim(.data[[fv_col]])
+      ) %>%
+      filter(!is.na(fg_name), fg_name != "", !is.na(FV), FV != "") %>%
+      mutate(
+        Name_clean = safe_upper(fg_name),
+        Org_clean  = safe_upper(fg_org)
+      ) %>%
+      distinct(Name_clean, Org_clean, .keep_all = TRUE)
+
+    out
   }
-  
-  board_tbl <- NULL
-  
-  for (tbl in tables) {
-    nm <- names(tbl)
-    if (
-      length(nm) > 0 &&
-      any(str_detect(nm, regex("^Name$", ignore_case = TRUE))) &&
-      any(str_detect(nm, regex("^Org$", ignore_case = TRUE))) &&
-      any(str_detect(nm, regex("^FV$", ignore_case = TRUE)))
-    ) {
-      board_tbl <- tbl
-      break
+
+  # ------------------------------------------------------------------
+  # Attempt 1: FanGraphs JSON API (avoids JavaScript rendering issues)
+  # ------------------------------------------------------------------
+  message("Attempt 1: FanGraphs JSON API...")
+  api_urls <- c(
+    paste0("https://www.fangraphs.com/api/prospects/board/0?draft=0&team=0&type=0&pos=all&stats=pit&view=profile&z=", board_year),
+    paste0("https://www.fangraphs.com/api/prospects/board/0?draft=0&team=0&type=0&pos=all&view=profile&z=", board_year),
+    "https://www.fangraphs.com/api/prospects/board/0?draft=0&team=0&type=0&pos=all&stats=pit&view=profile"
+  )
+
+  for (api_url in api_urls) {
+    message(paste("  Trying:", api_url))
+    api_result <- tryCatch({
+      resp <- httr::GET(api_url, browser_headers, httr::timeout(30))
+      status <- httr::status_code(resp)
+      message(paste("  Status:", status))
+
+      if (status == 200) {
+        content_text <- httr::content(resp, as = "text", encoding = "UTF-8")
+        message(paste("  Response length:", nchar(content_text), "chars"))
+
+        parsed <- jsonlite::fromJSON(content_text, flatten = TRUE)
+
+        if (is.data.frame(parsed) && nrow(parsed) > 0) {
+          message(paste("  API returned", nrow(parsed), "rows (data frame)"))
+          parsed
+        } else if (is.list(parsed)) {
+          # Look for a data frame anywhere in the top-level list
+          found_df <- NULL
+          for (key in names(parsed)) {
+            val <- parsed[[key]]
+            if (is.data.frame(val) && nrow(val) > 0) {
+              message(paste0("  Found data frame in key '", key, "' with ", nrow(val), " rows"))
+              found_df <- val
+              break
+            }
+          }
+          found_df
+        } else {
+          message(paste("  Unexpected API response type:", class(parsed)))
+          NULL
+        }
+      } else {
+        NULL
+      }
+    }, error = function(e) {
+      message(paste("  API error:", e$message))
+      NULL
+    })
+
+    if (!is.null(api_result) && nrow(api_result) > 0) {
+      extracted <- extract_fv_cols(api_result)
+      if (!is.null(extracted) && nrow(extracted) > 0) {
+        message(paste("Scraped", nrow(extracted), "prospects with FV via JSON API."))
+        return(extracted)
+      }
     }
   }
-  
-  if (is.null(board_tbl)) {
-    widths <- purrr::map_int(tables, ncol)
-    board_tbl <- tables[[which.max(widths)]]
+
+  # ------------------------------------------------------------------
+  # Attempt 2: HTML scraping with browser-like headers
+  # ------------------------------------------------------------------
+  message("Attempt 2: HTML scraping with browser-like headers...")
+  html_result <- tryCatch({
+    resp <- httr::GET(board_url, browser_headers, httr::timeout(30))
+    status <- httr::status_code(resp)
+    message(paste("  HTML response status:", status))
+
+    if (status == 200) {
+      content_text <- httr::content(resp, as = "text", encoding = "UTF-8")
+      message(paste("  HTML response length:", nchar(content_text), "chars"))
+
+      page   <- read_html(content_text)
+      tables <- page %>% html_elements("table") %>% html_table(fill = TRUE)
+      message(paste("  HTML tables found:", length(tables)))
+
+      for (i in seq_along(tables)) {
+        message(paste("  Table", i, "—", nrow(tables[[i]]), "rows,",
+                      "columns:", paste(names(tables[[i]]), collapse = ", ")))
+      }
+      tables
+    } else {
+      message(paste("  Non-200 status:", status))
+      NULL
+    }
+  }, error = function(e) {
+    message(paste("  HTML scrape error:", e$message))
+    NULL
+  })
+
+  if (!is.null(html_result) && length(html_result) > 0) {
+    # First pass: look for a table that has both Name and FV columns
+    board_tbl <- NULL
+    for (tbl in html_result) {
+      nm <- names(tbl)
+      if (
+        length(nm) > 0 &&
+        any(str_detect(nm, regex("name|player", ignore_case = TRUE))) &&
+        any(str_detect(nm, regex("^fv$|future.?value|grade", ignore_case = TRUE)))
+      ) {
+        board_tbl <- tbl
+        message("  Found matching table with Name + FV columns.")
+        break
+      }
+    }
+
+    # Second pass: fall back to the widest table
+    if (is.null(board_tbl)) {
+      message("  No exact match found — falling back to widest table.")
+      widths    <- purrr::map_int(html_result, ncol)
+      board_tbl <- html_result[[which.max(widths)]]
+    }
+
+    extracted <- extract_fv_cols(board_tbl)
+    if (!is.null(extracted) && nrow(extracted) > 0) {
+      message(paste("Scraped", nrow(extracted), "prospects with FV via HTML."))
+      return(extracted)
+    }
   }
-  
-  board_tbl <- board_tbl %>%
-    janitor::clean_names()
-  
-  name_col <- names(board_tbl)[str_detect(names(board_tbl), "^name$|player|prospect")]
-  org_col  <- names(board_tbl)[str_detect(names(board_tbl), "^org$|organization")]
-  fv_col   <- names(board_tbl)[str_detect(names(board_tbl), "^fv$|future_value")]
-  lvl_col  <- names(board_tbl)[str_detect(names(board_tbl), "current_level|level")]
-  
-  if (length(name_col) == 0 || length(fv_col) == 0) {
-    warning("Could not find Name/FV columns in FanGraphs Board table.")
-    return(tibble())
-  }
-  
-  name_col <- name_col[1]
-  org_col  <- if (length(org_col) > 0) org_col[1] else NA_character_
-  fv_col   <- fv_col[1]
-  lvl_col  <- if (length(lvl_col) > 0) lvl_col[1] else NA_character_
-  
-  out <- board_tbl %>%
-    transmute(
-      fg_name = safe_trim(.data[[name_col]]),
-      fg_org = if (!is.na(org_col)) safe_trim(.data[[org_col]]) else NA_character_,
-      fg_level = if (!is.na(lvl_col)) safe_trim(.data[[lvl_col]]) else NA_character_,
-      FV = safe_trim(.data[[fv_col]])
-    ) %>%
-    filter(!is.na(fg_name), fg_name != "", !is.na(FV), FV != "") %>%
-    mutate(
-      Name_clean = safe_upper(fg_name),
-      Org_clean = safe_upper(fg_org)
-    ) %>%
-    distinct(Name_clean, Org_clean, .keep_all = TRUE)
-  
-  message(paste("Scraped", nrow(out), "prospects with FV."))
-  out
+
+  # ------------------------------------------------------------------
+  # All attempts failed
+  # ------------------------------------------------------------------
+  warning(paste(
+    "All FanGraphs FV scrape attempts failed for year:", board_year,
+    "— FV column will be empty. Review the log messages above for details."
+  ))
+  tibble()
 }
 
 # -----------------------------

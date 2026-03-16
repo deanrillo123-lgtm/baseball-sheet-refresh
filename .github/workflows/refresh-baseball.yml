@@ -23,6 +23,8 @@ jobs:
             any::baseballr
             any::dplyr
             any::googlesheets4
+            any::httr
+            any::jsonlite
             any::lubridate
             any::purrr
             any::readr
