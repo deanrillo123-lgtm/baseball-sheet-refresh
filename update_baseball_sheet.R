@@ -68,8 +68,16 @@ calculate_percentile <- function(value, reference_vector) {
 
 # NORMALIZE TO 0-100 SCALE
 normalize_score <- function(value, min_val = 0, max_val = 100) {
-  if (is.na(value)) return(NA_real_)
-  pmax(0, pmin(100, (value - min_val) / (max_val - min_val) * 100))
+  if (all(is.na(value))) return(rep(NA_real_, length(value)))
+  
+  result <- rep(NA_real_, length(value))
+  valid_idx <- !is.na(value)
+  
+  if (any(valid_idx)) {
+    result[valid_idx] <- pmax(0, pmin(100, (value[valid_idx] - min_val) / (max_val - min_val) * 100))
+  }
+  
+  return(result)
 }
 
 # AGE VS LEVEL CALCULATION
