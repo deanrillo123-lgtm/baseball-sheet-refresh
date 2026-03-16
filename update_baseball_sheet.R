@@ -797,15 +797,15 @@ print("✅ Raw sheets written successfully!")
 # =====================================================
 # SCORING SHEETS WITH YOUR EXACT METRICS & FORMULAS
 # =====================================================
-
 # FA HITTERS: 25% xwOBA, 20% Barrel%, 15% HardHit%, 15% BB-K%, 10% SB, 15% Last14 trend
 # Final Score = 0.65 * Season + 0.35 * Trend - 0.20 * Risk
 fa_hitters <- mlb_hitters_out %>%
-  filter(fangraphs_id %in% fa_helper$FG_ID_clean | !is.na(xwOBA)) %>%
+  filter(!is.na(xwOBA)) %>%
   mutate(
     BB_K_pct = (BB_percent - K_percent),
     SB_normalized = normalize_score(SB, 0, 30),
-    last14_BB_K_pct = (ifelse(is.na(last14_PA), 0, last14_BB / last14_PA) - ifelse(is.na(last14_PA), 0, last14_SO / last14_PA)),
+    last14_SB_normalized = normalize_score(last14_SB, 0, 15),
+    last14_BB_K_pct = (ifelse(is.na(last14_BB), 0, last14_BB) - ifelse(is.na(last14_SO), 0, last14_SO)) / ifelse(is.na(last14_PA), 1, last14_PA),
     
     # Season Score
     season_xwoba_score = normalize_score(xwOBA, 0.300, 0.380),
@@ -814,16 +814,16 @@ fa_hitters <- mlb_hitters_out %>%
     season_bb_k_score = normalize_score(BB_K_pct, -0.10, 0.15),
     season_sb_score = SB_normalized,
     Season_Score = (season_xwoba_score * 0.25 + season_barrel_score * 0.20 + season_hh_score * 0.15 + 
-                    season_bb_k_score * 0.15 + season_sb_score * 0.10 +
-                    normalize_score(xwOBA, 0.300, 0.380) * 0.15),
+                    season_bb_k_score * 0.15 + season_sb_score * 0.10 + season_xwoba_score * 0.15),
     
     # Trend Score (last 14)
     trend_xwoba_score = normalize_score(last14_xwOBA, 0.300, 0.380),
     trend_barrel_score = normalize_score(last14_Barrel_percent, 5, 15),
     trend_hh_score = normalize_score(last14_HardHit_percent, 30, 50),
     trend_bb_k_score = normalize_score(last14_BB_K_pct, -0.10, 0.15),
+    trend_sb_score = last14_SB_normalized,
     Trend_Score = (trend_xwoba_score * 0.25 + trend_barrel_score * 0.20 + trend_hh_score * 0.15 + 
-                   trend_bb_k_score * 0.15 + SB_normalized * 0.10 + trend_xwoba_score * 0.15),
+                   trend_bb_k_score * 0.15 + trend_sb_score * 0.10 + trend_xwoba_score * 0.15),
     
     # Risk Score
     volatility = calculate_volatility_risk(Season_Score, Trend_Score),
@@ -841,6 +841,7 @@ fa_hitters <- mlb_hitters_out %>%
   ) %>%
   select(Name, Team, Season_Score, Trend_Score, Risk_Score, Final_Score, Trend_Flag, Breakout_Flag, Regression_Flag, Why) %>%
   arrange(desc(Final_Score))
+
 
 # FA PITCHERS: 25% K-BB%, 20% CSW%, 20% Velocity, 15% xFIP/SIERA, 10% Role, 10% Last14
 # Final Score = 0.65 * Season + 0.35 * Trend - 0.20 * Risk
