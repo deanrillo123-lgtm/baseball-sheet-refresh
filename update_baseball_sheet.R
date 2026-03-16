@@ -98,6 +98,18 @@ first_existing_col <- function(df, candidates) {
   found[1]
 }
 
+generate_fg_url <- function(fg_id) {
+  id <- as.character(fg_id)
+  ifelse(is.na(id) | id == "" | id == "NA", NA_character_,
+         paste0("https://www.fangraphs.com/statss.aspx?playerid=", id))
+}
+
+generate_savant_url <- function(mlbam_id) {
+  id <- as.character(mlbam_id)
+  ifelse(is.na(id) | id == "" | id == "NA", NA_character_,
+         paste0("https://baseballsavant.mlb.com/savant-player/", id))
+}
+
 # robust MLB hitter game log fetcher
 fetch_mlb_hitter_logs <- function(player_id, season_year) {
   fn_names <- c("fg_batter_game_logs", "fg_player_batter_game_logs")
@@ -357,10 +369,12 @@ mlb_hitters_out <- mlb_hitters_all %>%
     K_percent = safe_col(., "K_pct"),
     HardHit_percent = safe_col(., "HardHit_pct"),
     Barrel_percent = safe_col(., "Barrel_pct"),
-    EV = safe_col(., "EV")
+    EV = safe_col(., "EV"),
+    FanGraphs_URL = generate_fg_url(as.character(safe_col(., "playerid"))),
+    Savant_URL = generate_savant_url(safe_col(., "xMLBAMID"))
   ) %>%
   select(
-    fangraphs_id, Name, Team, Age, G, PA, HR, SB, AVG, OBP, SLG, OPS, ISO,
+    fangraphs_id, Name, Team, FanGraphs_URL, Savant_URL, Age, G, PA, HR, SB, AVG, OBP, SLG, OPS, ISO,
     wOBA, xwOBA, xBA, xSLG, wRC_plus, BB_percent, K_percent,
     HardHit_percent, Barrel_percent, EV
   ) %>%
@@ -399,9 +413,15 @@ mlb_pitchers_out <- mlb_pitchers_all %>%
     HardHit_percent = safe_col(., "HardHit_pct"),
     Barrel_percent = safe_col(., "Barrel_pct"),
     EV = safe_col(., "EV"),
+    Velo = if ("vFA(sc)" %in% names(.)) safe_col(., "vFA(sc)") else
+           if ("vFA" %in% names(.)) safe_col(., "vFA") else
+           if ("FBv" %in% names(.)) safe_col(., "FBv") else
+           safe_col(., "Velo"),
     Stuff_plus = if ("pb_stuff" %in% names(.)) safe_col(., "pb_stuff") else safe_col(., "Stuff+"),
     SV = safe_col(., "SV"),
-    HLD = if ("HLD" %in% names(.)) safe_col(., "HLD") else if ("HD" %in% names(.)) safe_col(., "HD") else rep(NA, nrow(.))
+    HLD = if ("HLD" %in% names(.)) safe_col(., "HLD") else if ("HD" %in% names(.)) safe_col(., "HD") else rep(NA, nrow(.)),
+    FanGraphs_URL = generate_fg_url(as.character(safe_col(., "playerid"))),
+    Savant_URL = generate_savant_url(safe_col(., "xMLBAMID"))
   ) %>%
   mutate(
     SV_num = safe_num(SV),
@@ -409,9 +429,9 @@ mlb_pitchers_out <- mlb_pitchers_all %>%
     SV_HLD = SV_num + HLD_num
   ) %>%
   select(
-    fangraphs_id, Name, Team, Age, G, IP, ERA, xERA, WHIP, FIP, FIP_minus,
+    fangraphs_id, Name, Team, FanGraphs_URL, Savant_URL, Age, G, IP, ERA, xERA, WHIP, FIP, FIP_minus,
     xFIP, xFIP_minus, SIERA, K_percent, BB_percent, K_BB_percent,
-    SwStr_percent, HardHit_percent, Barrel_percent, EV, Stuff_plus,
+    SwStr_percent, HardHit_percent, Barrel_percent, Velo, Stuff_plus,
     SV, HLD, SV_HLD
   ) %>%
   filter(fangraphs_id %in% mlb_pitch_ids)
@@ -575,6 +595,7 @@ if (nrow(mlb_pitch_logs) > 0) {
   hh_col <- first_existing_col(mlb_pitch_logs, c("HardHit_pct", "HardHit%"))
   barrel_col <- first_existing_col(mlb_pitch_logs, c("Barrel_pct", "Barrel%"))
   ev_col <- first_existing_col(mlb_pitch_logs, c("EV"))
+  velo_col <- first_existing_col(mlb_pitch_logs, c("vFA(sc)", "vFA", "FBv", "Velo"))
   stuff_col <- first_existing_col(mlb_pitch_logs, c("pb_stuff", "Stuff+", "Stuff_plus"))
   sv_col <- first_existing_col(mlb_pitch_logs, c("SV"))
   hld_col <- first_existing_col(mlb_pitch_logs, c("HLD", "HD"))
@@ -604,6 +625,7 @@ if (nrow(mlb_pitch_logs) > 0) {
       HardHit_num = safe_num(safe_col(., hh_col)),
       Barrel_num = safe_num(safe_col(., barrel_col)),
       EV_num = safe_num(safe_col(., ev_col)),
+      Velo_num = safe_num(safe_col(., velo_col)),
       Stuff_num = safe_num(safe_col(., stuff_col)),
       SV_num = safe_num(safe_col(., sv_col)),
       HLD_num = safe_num(safe_col(., hld_col))
@@ -636,6 +658,7 @@ if (nrow(mlb_pitch_logs) > 0) {
       last14_HardHit_percent = safe_mean(HardHit_num),
       last14_Barrel_percent = safe_mean(Barrel_num),
       last14_EV = safe_mean(EV_num),
+      last14_Velo = safe_mean(Velo_num),
       last14_Stuff_plus = safe_mean(Stuff_num),
       last14_SV = sum(SV_num, na.rm = TRUE),
       last14_HLD = sum(HLD_num, na.rm = TRUE),
@@ -674,6 +697,7 @@ if (nrow(mlb_pitch_logs) > 0) {
       last14_HardHit_percent = NA,
       last14_Barrel_percent = NA,
       last14_EV = NA,
+      last14_Velo = NA,
       last14_Stuff_plus = NA,
       last14_SV = NA,
       last14_HLD = NA,
@@ -748,7 +772,8 @@ if (nrow(milb_hit_logs) > 0) {
       xSLG_num = safe_num(safe_col(., "xSLG")),
       HardHit_num = safe_num(safe_col(., "HardHit_pct")),
       Barrel_num = safe_num(safe_col(., "Barrel_pct")),
-      EV_num = safe_num(safe_col(., "EV"))
+      EV_num = safe_num(safe_col(., "EV")),
+      wRC_plus_num = safe_num(safe_col(., "wRC_plus"))
     )
   
   milb_hitters_out <- milb_hit_logs %>%
@@ -780,16 +805,19 @@ if (nrow(milb_hit_logs) > 0) {
       HardHit_percent = safe_mean(HardHit_num),
       Barrel_percent = safe_mean(Barrel_num),
       EV = safe_mean(EV_num),
+      wRC_plus = safe_mean(wRC_plus_num),
       .groups = "drop"
     ) %>%
     left_join(milb_name_lookup, by = c("minor_playerid" = "MiLB_ID_clean")) %>%
     mutate(
-      Name = coalesce(Name_from_logs, Player_clean)
+      Name = coalesce(Name_from_logs, Player_clean),
+      FanGraphs_URL = generate_fg_url(minor_playerid),
+      Savant_URL = NA_character_
     ) %>%
     select(
-      minor_playerid, Name, Team, Level, G, PA, AB, H, HR, SB, BB, SO,
+      minor_playerid, Name, Team, FanGraphs_URL, Savant_URL, Level, G, PA, AB, H, HR, SB, BB, SO,
       AVG, OBP, SLG, OPS, ISO, BB_percent, K_percent, wOBA, xwOBA, xBA,
-      xSLG, HardHit_percent, Barrel_percent, EV
+      xSLG, wRC_plus, HardHit_percent, Barrel_percent, EV
     )
   
   milb_hit_last14 <- milb_hit_logs %>%
@@ -816,6 +844,7 @@ if (nrow(milb_hit_logs) > 0) {
       last14_HardHit_percent = safe_mean(HardHit_num),
       last14_Barrel_percent = safe_mean(Barrel_num),
       last14_EV = safe_mean(EV_num),
+      last14_wRC_plus = safe_mean(wRC_plus_num),
       .groups = "drop"
     )
   
@@ -894,6 +923,7 @@ if (nrow(milb_pitch_logs) > 0) {
       HardHit_num = safe_num(safe_col(., "HardHit_pct")),
       Barrel_num = safe_num(safe_col(., "Barrel_pct")),
       EV_num = safe_num(safe_col(., "EV")),
+      Velo_num = safe_num(safe_col(., first_existing_col(., c("Velo", "vFA(sc)", "vFA", "FBv")))),
       SV_num = safe_num(safe_col(., "SV")),
       HLD_num = safe_num(safe_col(., hld_col_milb))
     )
@@ -928,6 +958,7 @@ if (nrow(milb_pitch_logs) > 0) {
       HardHit_percent = safe_mean(HardHit_num),
       Barrel_percent = safe_mean(Barrel_num),
       EV = safe_mean(EV_num),
+      Velo = safe_mean(Velo_num),
       SV = sum(SV_num, na.rm = TRUE),
       HLD = sum(HLD_num, na.rm = TRUE),
       SV_HLD = sum(SV_num, na.rm = TRUE) + sum(HLD_num, na.rm = TRUE),
@@ -938,13 +969,15 @@ if (nrow(milb_pitch_logs) > 0) {
     ) %>%
     left_join(milb_name_lookup, by = c("minor_playerid" = "MiLB_ID_clean")) %>%
     mutate(
-      Name = coalesce(Name_from_logs, Player_clean)
+      Name = coalesce(Name_from_logs, Player_clean),
+      FanGraphs_URL = generate_fg_url(minor_playerid),
+      Savant_URL = NA_character_
     ) %>%
     select(
-      minor_playerid, Name, Team, Level, G, IP, H, ER, HR, BB, SO, TBF,
+      minor_playerid, Name, Team, FanGraphs_URL, Savant_URL, Level, G, IP, H, ER, HR, BB, SO, TBF,
       ERA, xERA, WHIP, FIP, FIP_minus, xFIP, xFIP_minus, SIERA, K_percent,
       BB_percent, K_BB_percent, SwStr_percent, HardHit_percent,
-      Barrel_percent, EV, SV, HLD, SV_HLD, K_per_9, BB_per_9, HR_per_9
+      Barrel_percent, Velo, SV, HLD, SV_HLD, K_per_9, BB_per_9, HR_per_9
     )
   
   milb_pitch_last14 <- milb_pitch_logs %>%
@@ -974,6 +1007,7 @@ if (nrow(milb_pitch_logs) > 0) {
       last14_HardHit_percent = safe_mean(HardHit_num),
       last14_Barrel_percent = safe_mean(Barrel_num),
       last14_EV = safe_mean(EV_num),
+      last14_Velo = safe_mean(Velo_num),
       last14_SV = sum(SV_num, na.rm = TRUE),
       last14_HLD = sum(HLD_num, na.rm = TRUE),
       last14_SV_HLD = sum(SV_num, na.rm = TRUE) + sum(HLD_num, na.rm = TRUE),
