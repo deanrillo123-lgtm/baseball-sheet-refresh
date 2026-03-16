@@ -846,7 +846,7 @@ fa_hitters <- mlb_hitters_out %>%
     
     # Risk Score
     volatility = calculate_volatility_risk(Season_Score, Trend_Score),
-    Risk_Score = calculate_hitter_risk(volatility = volatility),
+    Risk_Score = calculate_hitter_risk(usage_vol = volatility),
     
     # Final Score
     Final_Score = 0.65 * Season_Score + 0.35 * Trend_Score - 0.20 * Risk_Score
