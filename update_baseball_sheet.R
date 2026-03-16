@@ -50,9 +50,18 @@ safe_mean <- function(x) {
   if (length(x) == 0 || all(is.na(x))) return(NA_real_) else return(mean(x, na.rm = TRUE))
 }
 
+# Better sheet management function
 ensure_sheet <- function(ss, sheet_name) {
-  existing_tabs <- sheet_names(ss)
-  if (!(sheet_name %in% existing_tabs)) sheet_add(ss, sheet_name)
+  tryCatch({
+    existing_tabs <- sheet_names(ss)
+    if (!(sheet_name %in% existing_tabs)) {
+      message(paste("Creating sheet:", sheet_name))
+      sheet_add(ss, sheet_name)
+      Sys.sleep(1)  # Wait for sheet to be created
+    }
+  }, error = function(e) {
+    message(paste("Warning: Could not create sheet", sheet_name, "-", e$message))
+  })
 }
 
 first_existing_col <- function(df, candidates) {
@@ -1040,31 +1049,35 @@ if (nrow(fa_prospect_pitchers) > 0) {
   range_write(ss = sheet_url, data = fa_prospect_pitchers, sheet = "fa_prospect_pitchers", col_names = TRUE, reformat = FALSE)
 }
 
-# Write Rostered scoring sheets (same formulas, different player pool)
-rostered_hitters <- fa_hitters  # Use same scoring logic for rostered players
-rostered_pitchers <- fa_pitchers
-rostered_relievers <- fa_relievers
-rostered_prospect_hitters <- fa_prospect_hitters
-rostered_prospect_pitchers <- fa_prospect_pitchers
+# =====================================================
+# WRITE ALL 10 SCORING SHEETS - ROBUST
+# =====================================================
 
-if (nrow(rostered_hitters) > 0) {
-  range_write(ss = sheet_url, data = rostered_hitters, sheet = "rostered_hitters", col_names = TRUE, reformat = FALSE)
+# Create sheets one at a time with error handling
+scoring_sheets <- list(
+  "fa_hitters" = fa_hitters,
+  "fa_pitchers" = fa_pitchers,
+  "fa_relievers" = fa_relievers,
+  "fa_prospect_hitters" = fa_prospect_hitters,
+  "fa_prospect_pitchers" = fa_prospect_pitchers,
+  "rostered_hitters" = rostered_hitters,
+  "rostered_pitchers" = rostered_pitchers,
+  "rostered_relievers" = rostered_relievers,
+  "rostered_prospect_hitters" = rostered_prospect_hitters,
+  "rostered_prospect_pitchers" = rostered_prospect_pitchers
+)
+
+for (sheet_name in names(scoring_sheets)) {
+  tryCatch({
+    message(paste("Writing to sheet:", sheet_name))
+    ensure_sheet(sheet_url, sheet_name)
+    Sys.sleep(1)
+    range_write(ss = sheet_url, data = scoring_sheets[[sheet_name]], sheet = sheet_name, col_names = TRUE, reformat = FALSE)
+    message(paste("✅ Success:", sheet_name))
+  }, error = function(e) {
+    message(paste("❌ Error writing", sheet_name, ":", e$message))
+  })
+  Sys.sleep(1)  # Pause between writes to avoid rate limiting
 }
 
-if (nrow(rostered_pitchers) > 0) {
-  range_write(ss = sheet_url, data = rostered_pitchers, sheet = "rostered_pitchers", col_names = TRUE, reformat = FALSE)
-}
-
-if (nrow(rostered_relievers) > 0) {
-  range_write(ss = sheet_url, data = rostered_relievers, sheet = "rostered_relievers", col_names = TRUE, reformat = FALSE)
-}
-
-if (nrow(rostered_prospect_hitters) > 0) {
-  range_write(ss = sheet_url, data = rostered_prospect_hitters, sheet = "rostered_prospect_hitters", col_names = TRUE, reformat = FALSE)
-}
-
-if (nrow(rostered_prospect_pitchers) > 0) {
-  range_write(ss = sheet_url, data = rostered_prospect_pitchers, sheet = "rostered_prospect_pitchers", col_names = TRUE, reformat = FALSE)
-}
-
-print("✅ All 10 scoring sheets written successfully!")
+print("✅ Scoring sheets write complete!")
