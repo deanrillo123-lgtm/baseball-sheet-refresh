@@ -326,6 +326,12 @@ test_df <- test_df %>%
     MiLB_ID_clean = safe_trim(MiLB_FG_ID)
   )
 
+# Debug: Check what MiLB pitcher IDs we found
+milb_pitch_ids <- test_df %>%
+  filter(Level_clean == "MILB", Role_clean == "P", !is.na(MiLB_ID_clean), MiLB_ID_clean != "") %>%
+  pull(MiLB_ID_clean) %>% unique()
+
+print(paste("Found", length(milb_pitch_ids), "MiLB pitcher IDs:", paste(milb_pitch_ids, collapse = ", ")))
 milb_name_lookup <- test_df %>%
   filter(!is.na(MiLB_ID_clean), MiLB_ID_clean != "") %>%
   distinct(MiLB_ID_clean, Player_clean)
