@@ -66,6 +66,44 @@ calculate_percentile <- function(value, reference_vector) {
   mean(reference_vector <= value, na.rm = TRUE) * 100
 }
 
+# NORMALIZE TO 0-100 SCALE
+normalize_score <- function(value, min_val = 0, max_val = 100) {
+  if (is.na(value)) return(NA_real_)
+  pmax(0, pmin(100, (value - min_val) / (max_val - min_val) * 100))
+}
+
+# AGE VS LEVEL CALCULATION
+calculate_age_diff_score <- function(age, level) {
+  level_avg_ages <- list(
+    "AAA" = 26,
+    "AA" = 24,
+    "High-A" = 23,
+    "A" = 22,
+    "Rk" = 21,
+    "R" = 21
+  )
+  
+  target_age <- level_avg_ages[[level]]
+  if (is.na(target_age)) target_age <- 24
+  
+  age_diff <- age - target_age
+  
+  if (is.na(age_diff)) return(50)
+  
+  score <- case_when(
+    age_diff <= -3 ~ 95,
+    age_diff == -2 ~ 85,
+    age_diff == -1 ~ 70,
+    age_diff == 0 ~ 50,
+    age_diff == 1 ~ 40,
+    age_diff == 2 ~ 25,
+    age_diff >= 3 ~ 5,
+    TRUE ~ 50
+  )
+  
+  return(score)
+}
+
 # ROBUST DATA FETCHERS
 fetch_mlb_hitter_logs <- function(player_id, season_year) {
   for (fn_name in c("fg_batter_game_logs", "fg_player_batter_game_logs")) {
@@ -111,7 +149,7 @@ fetch_mlb_pitcher_logs <- function(player_id, season_year) {
   return(NULL)
 }
 
-# SCORING HELPER FUNCTIONS
+# RISK CALCULATION FUNCTIONS
 calculate_volatility_risk <- function(season_score, trend_score) {
   abs(season_score - trend_score)
 }
@@ -137,7 +175,7 @@ calculate_prospect_pitcher_risk <- function(command_risk = 0, role_risk = 0, age
 }
 
 # FLAG GENERATION
-generate_flags <- function(season_score, trend_score, player_type = "hitter") {
+generate_flags <- function(season_score, trend_score) {
   trend_diff <- trend_score - season_score
   
   trend_flag <- if (trend_diff >= 20) "🔥" 
@@ -151,11 +189,29 @@ generate_flags <- function(season_score, trend_score, player_type = "hitter") {
   
   regression_flag <- if (season_score >= 70 && trend_score <= season_score - 12) "🛑" else ""
   
+  why <- ""
+  if (trend_score >= 75 && trend_diff >= 12 && season_score < 60) {
+    why <- "Hot trend with breakout potential"
+  } else if (trend_score >= 80 && season_score >= 45 && season_score <= 60) {
+    why <- "Significant trend improvement, watch for breakout"
+  } else if (season_score >= 70 && trend_score <= season_score - 12) {
+    why <- "High season value with concerning recent trend"
+  } else if (trend_diff >= 20) {
+    why <- "Strong recent improvement"
+  } else if (trend_diff >= 10) {
+    why <- "Modest recent improvement"
+  } else if (trend_diff <= -20) {
+    why <- "Sharp recent decline"
+  } else if (trend_diff <= -10) {
+    why <- "Modest recent decline"
+  }
+  
   list(
     trend_flag = trend_flag,
     breakout_flag = breakout_flag,
     breakout_watch = breakout_watch,
-    regression_flag = regression_flag
+    regression_flag = regression_flag,
+    why = why
   )
 }
 
@@ -739,31 +795,176 @@ if (nrow(milb_pitchers_out) > 0) {
 print("✅ Raw sheets written successfully!")
 
 # =====================================================
-# SCORING SHEETS (PLACEHOLDER STRUCTURE)
+# SCORING SHEETS WITH YOUR EXACT METRICS & FORMULAS
 # =====================================================
-# This section creates basic scoring structures
-# You can expand these with your specific scoring logic
 
-fa_hitters <- tibble(Name = character(), Season_Score = numeric(), Trend_Score = numeric(),
-                     Risk_Score = numeric(), Final_Score = numeric(), Trend_Flag = character())
+# FA HITTERS: 25% xwOBA, 20% Barrel%, 15% HardHit%, 15% BB-K%, 10% SB, 15% Last14 trend
+# Final Score = 0.65 * Season + 0.35 * Trend - 0.20 * Risk
+fa_hitters <- mlb_hitters_out %>%
+  filter(fangraphs_id %in% fa_helper$FG_ID_clean | !is.na(xwOBA)) %>%
+  mutate(
+    BB_K_pct = (BB_percent - K_percent),
+    SB_normalized = normalize_score(SB, 0, 30),
+    last14_BB_K_pct = (ifelse(is.na(last14_PA), 0, last14_BB / last14_PA) - ifelse(is.na(last14_PA), 0, last14_SO / last14_PA)),
+    
+    # Season Score
+    season_xwoba_score = normalize_score(xwOBA, 0.300, 0.380),
+    season_barrel_score = normalize_score(Barrel_percent, 5, 15),
+    season_hh_score = normalize_score(HardHit_percent, 30, 50),
+    season_bb_k_score = normalize_score(BB_K_pct, -0.10, 0.15),
+    season_sb_score = SB_normalized,
+    Season_Score = (season_xwoba_score * 0.25 + season_barrel_score * 0.20 + season_hh_score * 0.15 + 
+                    season_bb_k_score * 0.15 + season_sb_score * 0.10 +
+                    normalize_score(xwOBA, 0.300, 0.380) * 0.15),
+    
+    # Trend Score (last 14)
+    trend_xwoba_score = normalize_score(last14_xwOBA, 0.300, 0.380),
+    trend_barrel_score = normalize_score(last14_Barrel_percent, 5, 15),
+    trend_hh_score = normalize_score(last14_HardHit_percent, 30, 50),
+    trend_bb_k_score = normalize_score(last14_BB_K_pct, -0.10, 0.15),
+    Trend_Score = (trend_xwoba_score * 0.25 + trend_barrel_score * 0.20 + trend_hh_score * 0.15 + 
+                   trend_bb_k_score * 0.15 + SB_normalized * 0.10 + trend_xwoba_score * 0.15),
+    
+    # Risk Score
+    volatility = calculate_volatility_risk(Season_Score, Trend_Score),
+    Risk_Score = calculate_hitter_risk(volatility = volatility),
+    
+    # Final Score
+    Final_Score = 0.65 * Season_Score + 0.35 * Trend_Score - 0.20 * Risk_Score
+  ) %>%
+  mutate(flags = map2(Season_Score, Trend_Score, generate_flags)) %>%
+  mutate(
+    Trend_Flag = sapply(flags, function(x) x$trend_flag),
+    Breakout_Flag = sapply(flags, function(x) x$breakout_flag),
+    Regression_Flag = sapply(flags, function(x) x$regression_flag),
+    Why = sapply(flags, function(x) x$why)
+  ) %>%
+  select(Name, Team, Season_Score, Trend_Score, Risk_Score, Final_Score, Trend_Flag, Breakout_Flag, Regression_Flag, Why) %>%
+  arrange(desc(Final_Score))
 
-fa_pitchers <- tibble(Name = character(), Season_Score = numeric(), Trend_Score = numeric(),
-                      Risk_Score = numeric(), Final_Score = numeric(), Trend_Flag = character())
+# FA PITCHERS: 25% K-BB%, 20% CSW%, 20% Velocity, 15% xFIP/SIERA, 10% Role, 10% Last14
+# Final Score = 0.65 * Season + 0.35 * Trend - 0.20 * Risk
+fa_pitchers <- mlb_pitchers_out %>%
+  filter(IP >= 1) %>%
+  mutate(
+    CSW_percent = (SwStr_percent + (100 - SwStr_percent) * 0.3), # Approximation
+    K_BB_pct = (K_percent - BB_percent),
+    last14_K_BB_pct = (last14_K_percent - last14_BB_percent),
+    
+    # Season Score
+    season_kbb_score = normalize_score(K_BB_pct, -0.05, 0.20),
+    season_csw_score = normalize_score(CSW_percent, 25, 35),
+    season_velo_score = normalize_score(EV, 85, 95),
+    season_xfip_score = 100 - normalize_score(xFIP, 3.00, 5.00),
+    Season_Score = (season_kbb_score * 0.25 + season_csw_score * 0.20 + season_velo_score * 0.20 + 
+                    season_xfip_score * 0.15 + 50 * 0.10 + normalize_score(xFIP, 3.00, 5.00) * 0.10),
+    
+    # Trend Score
+    trend_kbb_score = normalize_score(last14_K_BB_pct, -0.05, 0.20),
+    trend_velo_score = normalize_score(last14_EV, 85, 95),
+    trend_xfip_score = 100 - normalize_score(last14_xFIP, 3.00, 5.00),
+    Trend_Score = (trend_kbb_score * 0.25 + season_csw_score * 0.20 + trend_velo_score * 0.20 + 
+                   trend_xfip_score * 0.15 + 50 * 0.10 + trend_xfip_score * 0.10),
+    
+    # Risk Score
+    volatility = calculate_volatility_risk(Season_Score, Trend_Score),
+    Risk_Score = calculate_sp_risk(volatility = volatility),
+    
+    # Final Score
+    Final_Score = 0.65 * Season_Score + 0.35 * Trend_Score - 0.20 * Risk_Score
+  ) %>%
+  mutate(flags = map2(Season_Score, Trend_Score, generate_flags)) %>%
+  mutate(
+    Trend_Flag = sapply(flags, function(x) x$trend_flag),
+    Breakout_Flag = sapply(flags, function(x) x$breakout_flag),
+    Regression_Flag = sapply(flags, function(x) x$regression_flag),
+    Why = sapply(flags, function(x) x$why)
+  ) %>%
+  select(Name, Team, Season_Score, Trend_Score, Risk_Score, Final_Score, Trend_Flag, Breakout_Flag, Regression_Flag, Why) %>%
+  arrange(desc(Final_Score))
 
-fa_relievers <- tibble(Name = character(), Season_Score = numeric(), Trend_Score = numeric(),
-                       Risk_Score = numeric(), Final_Score = numeric(), Trend_Flag = character())
+# FA RELIEVERS: 30% Dominance (K-BB+CSW+SwStr), 20% Role Value (SV/HLD), 20% Stuff, 15% xFIP/SIERA, 15% Last14
+# Final Score = 0.65 * Season + 0.35 * Trend - 0.20 * Risk
+fa_relievers <- mlb_pitchers_out %>%
+  filter(IP >= 1) %>%
+  mutate(
+    dominance = (K_percent + SwStr_percent * 0.5),
+    role_value = normalize_score(SV_HLD, 0, 40),
+    
+    # Season Score
+    season_dom_score = normalize_score(dominance, 20, 40),
+    season_role_score = role_value,
+    season_stuff_score = normalize_score(Stuff_plus, 90, 130),
+    season_xfip_score = 100 - normalize_score(xFIP, 3.00, 5.00),
+    Season_Score = (season_dom_score * 0.30 + season_role_score * 0.20 + season_stuff_score * 0.20 + 
+                    season_xfip_score * 0.15 + normalize_score(dominance, 20, 40) * 0.15),
+    
+    # Trend Score
+    trend_xfip_score = 100 - normalize_score(last14_xFIP, 3.00, 5.00),
+    Trend_Score = (season_dom_score * 0.30 + season_role_score * 0.20 + season_stuff_score * 0.20 + 
+                   trend_xfip_score * 0.15 + season_dom_score * 0.15),
+    
+    # Risk Score
+    volatility = calculate_volatility_risk(Season_Score, Trend_Score),
+    Risk_Score = calculate_rp_risk(volatility = volatility),
+    
+    # Final Score
+    Final_Score = 0.65 * Season_Score + 0.35 * Trend_Score - 0.20 * Risk_Score
+  ) %>%
+  mutate(flags = map2(Season_Score, Trend_Score, generate_flags)) %>%
+  mutate(
+    Trend_Flag = sapply(flags, function(x) x$trend_flag),
+    Breakout_Flag = sapply(flags, function(x) x$breakout_flag),
+    Regression_Flag = sapply(flags, function(x) x$regression_flag),
+    Why = sapply(flags, function(x) x$why)
+  ) %>%
+  select(Name, Team, Season_Score, Trend_Score, Risk_Score, Final_Score, Trend_Flag, Breakout_Flag, Regression_Flag, Why) %>%
+  arrange(desc(Final_Score))
 
-fa_prospect_hitters <- tibble(Name = character(), Season_Score = numeric(), Trend_Score = numeric(),
-                              Risk_Score = numeric(), Upside_Score = numeric(), Final_Score = numeric())
+# FA PROSPECT HITTERS: 25% wRC+, 25% Age vs Level, 20% BB-K%, 20% ISO, 10% Last14
+# Final Score = 0.70 * Season + 0.20 * Trend + 0.10 * Upside - 0.15 * Risk
+fa_prospect_hitters <- milb_hitters_out %>%
+  mutate(
+    Age = 25, # You'll need to add Age to milb_hitters_out
+    BB_K_pct = (BB_percent - K_percent),
+    Age_Diff_Score = calculate_age_diff_score(Age, Level),
+    
+    # Season Score
+    season_wrc_score = normalize_score(wOBA, 0.300, 0.380),
+    season_age_score = Age_Diff_Score,
+    season_bb_k_score = normalize_score(BB_K_pct, -0.10, 0.15),
+    season_iso_score = normalize_score(ISO, 0.100, 0.250),
+    Season_Score = (season_wrc_score * 0.25 + season_age_score * 0.25 + season_bb_k_score * 0.20 + 
+                    season_iso_score * 0.20 + normalize_score(wOBA, 0.300, 0.380) * 0.10),
+    
+    # Trend Score (last 14)
+    trend_wrc_score = normalize_score(last14_wOBA, 0.300, 0.380),
+    trend_bb_k_score = normalize_score(last14_BB_percent - last14_K_percent, -0.10, 0.15),
+    trend_iso_score = normalize_score(last14_ISO, 0.100, 0.250),
+    Trend_Score = (trend_wrc_score * 0.25 + season_age_score * 0.25 + trend_bb_k_score * 0.20 + 
+                   trend_iso_score * 0.20 + trend_wrc_score * 0.10),
+    
+    # Upside Score
+    Upside_Score = Age_Diff_Score,
+    
+    # Risk Score
+    k_risk = (K_percent / 30) * 100,
+    sample_risk = normalize_score(PA, 0, 500),
+    volatility = calculate_volatility_risk(Season_Score, Trend_Score),
+    Risk_Score = calculate_prospect_hitter_risk(k_risk = k_risk, sample_risk = sample_risk, vol = volatility),
+    
+    # Final Score
+    Final_Score = 0.70 * Season_Score + 0.20 * Trend_Score + 0.10 * Upside_Score - 0.15 * Risk_Score
+  ) %>%
+  mutate(flags = map2(Season_Score, Trend_Score, generate_flags)) %>%
+  mutate(
+    Trend_Flag = sapply(flags, function(x) x$trend_flag),
+    Breakout_Flag = sapply(flags, function(x) x$breakout_flag),
+    Regression_Flag = sapply(flags, function(x) x$regression_flag),
+    Why = sapply(flags, function(x) x$why)
+  ) %>%
+  select(Name, Team, Level, Season_Score, Trend_Score, Upside_Score, Risk_Score, Final_Score, Trend_Flag, Breakout_Flag, Regression_Flag, Why) %>%
+  arrange(desc(Final_Score))
 
-fa_prospect_pitchers <- tibble(Name = character(), Season_Score = numeric(), Trend_Score = numeric(),
-                               Risk_Score = numeric(), Upside_Score = numeric(), Final_Score = numeric())
-
-# Rostered versions (same structure)
-rostered_hitters <- fa_hitters
-rostered_pitchers <- fa_pitchers
-rostered_relievers <- fa_relievers
-rostered_prospect_hitters <- fa_prospect_hitters
-rostered_prospect_pitchers <- fa_prospect_pitchers
-
-print("✅ Script execution completed successfully!")
+# FA PROSPECT PITCHERS: 30% K-BB%, 25% Age vs Level, 15% BB%, 15% IP/start, 15% Last14
+# Final Score = 0.70 * Season + 0.20 * Trend + 0.10 * Upside - 0.15*
