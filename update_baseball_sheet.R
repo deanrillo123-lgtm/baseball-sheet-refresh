@@ -98,6 +98,20 @@ first_existing_col <- function(df, candidates) {
   found[1]
 }
 
+make_name_slug <- function(name) {
+  slug <- tolower(gsub("[^a-zA-Z0-9 ]", "", as.character(name)))
+  gsub(" +", "-", trimws(slug))
+}
+
+make_fg_url <- function(name, fg_id) {
+  paste0("https://www.fangraphs.com/players/", make_name_slug(name), "/", fg_id)
+}
+
+# Note: fangraphs_id is used as a proxy for the MLB/Savant player ID per project spec.
+make_savant_url <- function(name, player_id) {
+  paste0("https://baseballsavant.mlb.com/savant-player/", make_name_slug(name), "?player_id=", player_id)
+}
+
 # robust MLB hitter game log fetcher
 fetch_mlb_hitter_logs <- function(player_id, season_year) {
   fn_names <- c("fg_batter_game_logs", "fg_player_batter_game_logs")
@@ -748,7 +762,8 @@ if (nrow(milb_hit_logs) > 0) {
       xSLG_num = safe_num(safe_col(., "xSLG")),
       HardHit_num = safe_num(safe_col(., "HardHit_pct")),
       Barrel_num = safe_num(safe_col(., "Barrel_pct")),
-      EV_num = safe_num(safe_col(., "EV"))
+      EV_num = safe_num(safe_col(., "EV")),
+      wRC_plus_num = safe_num(safe_col(., "wRC_plus"))
     )
   
   milb_hitters_out <- milb_hit_logs %>%
@@ -780,6 +795,7 @@ if (nrow(milb_hit_logs) > 0) {
       HardHit_percent = safe_mean(HardHit_num),
       Barrel_percent = safe_mean(Barrel_num),
       EV = safe_mean(EV_num),
+      wRC_plus = safe_mean(wRC_plus_num),
       .groups = "drop"
     ) %>%
     left_join(milb_name_lookup, by = c("minor_playerid" = "MiLB_ID_clean")) %>%
@@ -789,7 +805,7 @@ if (nrow(milb_hit_logs) > 0) {
     select(
       minor_playerid, Name, Team, Level, G, PA, AB, H, HR, SB, BB, SO,
       AVG, OBP, SLG, OPS, ISO, BB_percent, K_percent, wOBA, xwOBA, xBA,
-      xSLG, HardHit_percent, Barrel_percent, EV
+      xSLG, HardHit_percent, Barrel_percent, EV, wRC_plus
     )
   
   milb_hit_last14 <- milb_hit_logs %>%
@@ -816,6 +832,7 @@ if (nrow(milb_hit_logs) > 0) {
       last14_HardHit_percent = safe_mean(HardHit_num),
       last14_Barrel_percent = safe_mean(Barrel_num),
       last14_EV = safe_mean(EV_num),
+      last14_wRC_plus = safe_mean(wRC_plus_num),
       .groups = "drop"
     )
   
@@ -1082,6 +1099,37 @@ if (exists("milb_pitchers_out") && nrow(milb_pitchers_out) > 0 && nrow(fv_lookup
 }
 
 print("Finished scraping and joining FanGraphs FV.")
+
+# =========================================================
+# ADD PROFILE URLS
+# =========================================================
+mlb_hitters_out <- mlb_hitters_out %>%
+  mutate(
+    fg_url = make_fg_url(Name, fangraphs_id),
+    savant_url = make_savant_url(Name, fangraphs_id)
+  )
+
+mlb_pitchers_out <- mlb_pitchers_out %>%
+  mutate(
+    fg_url = make_fg_url(Name, fangraphs_id),
+    savant_url = make_savant_url(Name, fangraphs_id)
+  )
+
+if (exists("milb_hitters_out") && nrow(milb_hitters_out) > 0) {
+  milb_hitters_out <- milb_hitters_out %>%
+    mutate(
+      fg_url = make_fg_url(Name, minor_playerid),
+      savant_url = make_savant_url(Name, minor_playerid)
+    )
+}
+
+if (exists("milb_pitchers_out") && nrow(milb_pitchers_out) > 0) {
+  milb_pitchers_out <- milb_pitchers_out %>%
+    mutate(
+      fg_url = make_fg_url(Name, minor_playerid),
+      savant_url = make_savant_url(Name, minor_playerid)
+    )
+}
 
 # =========================================================
 # WRITE TO GOOGLE SHEETS
