@@ -490,6 +490,9 @@ if (nrow(mlb_hit_logs) > 0) {
   hh_col <- first_existing_col(mlb_hit_logs, c("HardHit%", "HardHit_pct"))
   barrel_col <- first_existing_col(mlb_hit_logs, c("Barrel%", "Barrel_pct"))
   ev_col <- first_existing_col(mlb_hit_logs, c("EV"))
+  wrc_plus_col <- first_existing_col(mlb_hit_logs, c("wRC+", "wRC_plus", "wRCplus"))
+  obp_col_hit <- first_existing_col(mlb_hit_logs, c("OBP"))
+  xba_col <- first_existing_col(mlb_hit_logs, c("xBA", "xAVG"))
   
   mlb_hit_logs <- mlb_hit_logs %>%
     mutate(
@@ -506,7 +509,10 @@ if (nrow(mlb_hit_logs) > 0) {
       xwOBA_num = safe_num(safe_col(., xwoba_col)),
       HardHit_num = safe_num(safe_col(., hh_col)),
       Barrel_num = safe_num(safe_col(., barrel_col)),
-      EV_num = safe_num(safe_col(., ev_col))
+      EV_num = safe_num(safe_col(., ev_col)),
+      wRC_plus_num = safe_num(safe_col(., wrc_plus_col)),
+      OBP_num = safe_num(safe_col(., obp_col_hit)),
+      xBA_num = safe_num(safe_col(., xba_col))
     )
   
   mlb_hit_last14 <- mlb_hit_logs %>%
@@ -522,9 +528,17 @@ if (nrow(mlb_hit_logs) > 0) {
       last14_BB = sum(BB_num, na.rm = TRUE),
       last14_SO = sum(SO_num, na.rm = TRUE),
       last14_AVG = ifelse(last14_AB > 0, last14_H / last14_AB, NA_real_),
+      last14_OBP = ifelse(
+        (last14_AB + last14_BB) > 0,
+        # Simplified OBP (H+BB)/(AB+BB); HBP and SF not available in game logs
+        (last14_H + last14_BB) / (last14_AB + last14_BB),
+        safe_mean(OBP_num)
+      ),
       last14_ISO = safe_mean(ISO_num),
       last14_wOBA = safe_mean(wOBA_num),
       last14_xwOBA = safe_mean(xwOBA_num),
+      last14_wRC_Plus = safe_mean(wRC_plus_num),
+      last14_xBA = safe_mean(xBA_num),
       last14_HardHit_percent = safe_mean(HardHit_num),
       last14_Barrel_percent = safe_mean(Barrel_num),
       last14_EV = safe_mean(EV_num),
@@ -537,9 +551,10 @@ if (nrow(mlb_hit_logs) > 0) {
   mlb_hitters_out <- mlb_hitters_out %>%
     mutate(
       last14_G = NA, last14_PA = NA, last14_AB = NA, last14_H = NA, last14_HR = NA,
-      last14_SB = NA, last14_BB = NA, last14_SO = NA, last14_AVG = NA, last14_ISO = NA,
-      last14_wOBA = NA, last14_xwOBA = NA, last14_HardHit_percent = NA,
-      last14_Barrel_percent = NA, last14_EV = NA
+      last14_SB = NA, last14_BB = NA, last14_SO = NA, last14_AVG = NA,
+      last14_OBP = NA, last14_ISO = NA, last14_wOBA = NA, last14_xwOBA = NA,
+      last14_wRC_Plus = NA, last14_xBA = NA,
+      last14_HardHit_percent = NA, last14_Barrel_percent = NA, last14_EV = NA
     )
 }
 
@@ -564,6 +579,7 @@ if (nrow(mlb_pitch_logs) > 0) {
   bbpct_col <- first_existing_col(mlb_pitch_logs, c("BB%", "BB_pct"))
   swstr_col <- first_existing_col(mlb_pitch_logs, c("SwStr%", "SwStr_pct"))
   ev_col <- first_existing_col(mlb_pitch_logs, c("EV"))
+  xera_col <- first_existing_col(mlb_pitch_logs, c("xERA"))
   
   mlb_pitch_logs <- mlb_pitch_logs %>%
     mutate(
@@ -581,7 +597,8 @@ if (nrow(mlb_pitch_logs) > 0) {
       K_percent_num = safe_num(safe_col(., kpct_col)),
       BB_percent_num = safe_num(safe_col(., bbpct_col)),
       SwStr_percent_num = safe_num(safe_col(., swstr_col)),
-      EV_num = safe_num(safe_col(., ev_col))
+      EV_num = safe_num(safe_col(., ev_col)),
+      xERA_num = safe_num(safe_col(., xera_col))
     )
   
   mlb_pitch_last14 <- mlb_pitch_logs %>%
@@ -599,6 +616,7 @@ if (nrow(mlb_pitch_logs) > 0) {
       last14_ERA = ifelse(last14_IP > 0, 9 * last14_ER / last14_IP, NA_real_),
       last14_FIP = safe_mean(FIP_num),
       last14_xFIP = safe_mean(xFIP_num),
+      last14_xERA = safe_mean(xERA_num),
       last14_SIERA = safe_mean(SIERA_num),
       last14_K_percent = ifelse(last14_TBF > 0, last14_SO / last14_TBF, NA_real_),
       last14_BB_percent = ifelse(last14_TBF > 0, last14_BB / last14_TBF, NA_real_),
@@ -614,7 +632,8 @@ if (nrow(mlb_pitch_logs) > 0) {
     mutate(
       last14_G = NA, last14_IP = NA, last14_H = NA, last14_ER = NA, last14_HR = NA,
       last14_BB = NA, last14_SO = NA, last14_TBF = NA, last14_ERA = NA, last14_FIP = NA,
-      last14_xFIP = NA, last14_SIERA = NA, last14_K_percent = NA, last14_BB_percent = NA,
+      last14_xFIP = NA, last14_xERA = NA, last14_SIERA = NA,
+      last14_K_percent = NA, last14_BB_percent = NA,
       last14_SwStr_percent = NA, last14_EV = NA
     )
 }
@@ -637,6 +656,7 @@ if (nrow(milb_hit_logs) > 0) {
   name_col_milb_hit <- first_existing_col(milb_hit_logs, c("Name", "PlayerName", "player_name", "Player"))
   team_col_milb_hit <- first_existing_col(milb_hit_logs, c("Team", "Tm", "team_name"))
   level_col_milb_hit <- first_existing_col(milb_hit_logs, c("Level", "level"))
+  sb_col_milb <- first_existing_col(milb_hit_logs, c("SB"))
   
   milb_hit_logs <- milb_hit_logs %>%
     mutate(
@@ -647,6 +667,7 @@ if (nrow(milb_hit_logs) > 0) {
       HR_num = safe_num(safe_col(., "HR")),
       SO_num = safe_num(safe_col(., "SO")),
       BB_num = safe_num(safe_col(., "BB")),
+      SB_num = safe_num(safe_col(., sb_col_milb)),
       ISO_num = safe_num(safe_col(., "ISO")),
       wOBA_num = safe_num(safe_col(., "wOBA")),
       BB_pct_num = safe_num(safe_col(., "BB%")),
@@ -667,12 +688,19 @@ if (nrow(milb_hit_logs) > 0) {
       HR = sum(HR_num, na.rm = TRUE),
       SO = sum(SO_num, na.rm = TRUE),
       BB = sum(BB_num, na.rm = TRUE),
+      SB = sum(SB_num, na.rm = TRUE),
       AVG = ifelse(AB > 0, H / AB, NA_real_),
       ISO = safe_mean(ISO_num),
       wOBA = safe_mean(wOBA_num),
       BB_percent = safe_mean(BB_pct_num),
       K_percent = safe_mean(K_pct_num),
       .groups = "drop"
+    ) %>%
+    mutate(
+      # Simplified OBP (H+BB)/(AB+BB); HBP and SF not available in MiLB game logs
+      OBP = ifelse((AB + BB) > 0, (H + BB) / (AB + BB), NA_real_),
+      SLG = AVG + ISO,  # SLG = AVG + ISO since ISO = SLG - AVG
+      OPS = ifelse(!is.na(OBP) & !is.na(SLG), OBP + SLG, NA_real_)
     ) %>%
     left_join(milb_name_lookup, by = c("minor_playerid" = "MiLB_ID_clean")) %>%
     mutate(Name = coalesce(Name, Player_clean)) %>%
@@ -697,11 +725,23 @@ if (nrow(milb_hit_logs) > 0) {
     summarise(
       last14_G = n(),
       last14_PA = sum(PA_num, na.rm = TRUE),
+      last14_AB = sum(AB_num, na.rm = TRUE),
+      last14_H = sum(H_num, na.rm = TRUE),
+      last14_BB = sum(BB_num, na.rm = TRUE),
+      last14_SB = sum(SB_num, na.rm = TRUE),
+      last14_AVG = ifelse(last14_AB > 0, last14_H / last14_AB, NA_real_),
+      last14_OBP = ifelse((last14_AB + last14_BB) > 0,
+                          # Simplified OBP (H+BB)/(AB+BB); HBP and SF not available in MiLB game logs
+                          (last14_H + last14_BB) / (last14_AB + last14_BB), NA_real_),
       last14_ISO = safe_mean(ISO_num),
       last14_wOBA = safe_mean(wOBA_num),
       last14_BB_percent = safe_mean(BB_pct_num),
       last14_K_percent = safe_mean(K_pct_num),
       .groups = "drop"
+    ) %>%
+    mutate(
+      last14_SLG = ifelse(!is.na(last14_AVG) & !is.na(last14_ISO), last14_AVG + last14_ISO, NA_real_),
+      last14_OPS = ifelse(!is.na(last14_OBP) & !is.na(last14_SLG), last14_OBP + last14_SLG, NA_real_)
     )
   
   milb_hitters_out <- milb_hitters_out %>%
@@ -728,6 +768,9 @@ if (nrow(milb_pitch_logs) > 0) {
   name_col_milb_pitch <- first_existing_col(milb_pitch_logs, c("Name", "PlayerName", "player_name", "Player"))
   team_col_milb_pitch <- first_existing_col(milb_pitch_logs, c("Team", "Tm", "team_name"))
   level_col_milb_pitch <- first_existing_col(milb_pitch_logs, c("Level", "level"))
+  er_col_milb <- first_existing_col(milb_pitch_logs, c("ER"))
+  h_col_milb <- first_existing_col(milb_pitch_logs, c("H"))
+  xera_col_milb <- first_existing_col(milb_pitch_logs, c("xERA"))
   
   milb_pitch_logs <- milb_pitch_logs %>%
     mutate(
@@ -736,7 +779,10 @@ if (nrow(milb_pitch_logs) > 0) {
       TBF_num = safe_num(safe_col(., "TBF")),
       SO_num = safe_num(safe_col(., "SO")),
       BB_num = safe_num(safe_col(., "BB")),
+      ER_num = safe_num(safe_col(., er_col_milb)),
+      H_num = safe_num(safe_col(., h_col_milb)),
       FIP_num = safe_num(safe_col(., "FIP")),
+      xERA_num = safe_num(safe_col(., xera_col_milb)),
       K_pct_num = safe_num(safe_col(., "K%")),
       BB_pct_num = safe_num(safe_col(., "BB%")),
       EV_num = safe_num(safe_col(., "EV"))
@@ -754,11 +800,18 @@ if (nrow(milb_pitch_logs) > 0) {
       TBF = sum(TBF_num, na.rm = TRUE),
       SO = sum(SO_num, na.rm = TRUE),
       BB = sum(BB_num, na.rm = TRUE),
+      ER = sum(ER_num, na.rm = TRUE),
+      H = sum(H_num, na.rm = TRUE),
       FIP = safe_mean(FIP_num),
+      xERA = safe_mean(xERA_num),
       K_percent = ifelse(TBF > 0, SO / TBF, NA_real_),
       BB_percent = ifelse(TBF > 0, BB / TBF, NA_real_),
       EV = safe_mean(EV_num),
       .groups = "drop"
+    ) %>%
+    mutate(
+      ERA = ifelse(IP > 0, 9 * ER / IP, NA_real_),
+      WHIP = ifelse(IP > 0, (H + BB) / IP, NA_real_)
     ) %>%
     left_join(milb_name_lookup, by = c("minor_playerid" = "MiLB_ID_clean")) %>%
     mutate(Name = coalesce(Name, Player_clean)) %>%
@@ -783,7 +836,13 @@ if (nrow(milb_pitch_logs) > 0) {
     summarise(
       last14_G = n(),
       last14_IP = sum(IP_num, na.rm = TRUE),
+      last14_ER = sum(ER_num, na.rm = TRUE),
+      last14_H = sum(H_num, na.rm = TRUE),
+      last14_BB = sum(BB_num, na.rm = TRUE),
+      last14_ERA = ifelse(last14_IP > 0, 9 * last14_ER / last14_IP, NA_real_),
+      last14_WHIP = ifelse(last14_IP > 0, (last14_H + last14_BB) / last14_IP, NA_real_),
       last14_FIP = safe_mean(FIP_num),
+      last14_xERA = safe_mean(xERA_num),
       last14_K_percent = safe_mean(K_pct_num),
       last14_BB_percent = safe_mean(BB_pct_num),
       last14_EV = safe_mean(EV_num),
@@ -840,6 +899,15 @@ if (nrow(milb_hitters_out) > 0) {
 if (nrow(milb_pitchers_out) > 0) {
   range_write(ss = sheet_url, data = milb_pitchers_out, sheet = "raw_milb_pitchers", col_names = TRUE, reformat = FALSE)
 }
+
+# =====================================================
+# TRADE PASTE - Write full Test tab data to raw sheet
+# =====================================================
+trade_paste_out <- test_df %>%
+  select(-Player_clean, -Role_clean, -Level_clean, -Fangraphs_ID_clean, -MiLB_ID_clean)
+
+ensure_sheet(sheet_url, "raw_trade_paste")
+range_write(ss = sheet_url, data = trade_paste_out, sheet = "raw_trade_paste", col_names = TRUE, reformat = FALSE)
 
 print("✅ Raw sheets written successfully!")
 
@@ -973,9 +1041,17 @@ fa_relievers <- mlb_pitchers_out %>%
 
 # FA PROSPECT HITTERS: 25% wRC+, 25% Age vs Level, 20% BB-K%, 20% ISO, 10% Last14
 # Final Score = 0.70 * Season + 0.20 * Trend + 0.10 * Upside - 0.15 * Risk
+milb_age_lookup <- test_df %>%
+  filter(Level_clean == "MILB", Role_clean == "H", !is.na(MiLB_ID_clean), MiLB_ID_clean != "") %>%
+  transmute(
+    MiLB_ID_clean,
+    Age_from_test = safe_num(Age)
+  )
+
 fa_prospect_hitters <- milb_hitters_out %>%
+  left_join(milb_age_lookup, by = c("minor_playerid" = "MiLB_ID_clean")) %>%
   mutate(
-    Age = 25, # You'll need to add Age to milb_hitters_out
+    Age = coalesce(Age_from_test, 25),
     BB_K_pct = (BB_percent - K_percent),
     Age_Diff_Score = calculate_age_diff_score(Age, Level),
     
