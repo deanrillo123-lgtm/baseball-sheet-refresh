@@ -1,0 +1,55 @@
+name: baseball-sheet-refresh
+
+on:
+  workflow_dispatch:
+    inputs:
+      refresh_type:
+        description: "scheduled | manual | apps_script"
+        required: false
+        default: "manual"
+  schedule:
+    - cron: "0 9 * * 1,4"
+
+concurrency:
+  group: baseball-sheet-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    env:
+      TZ: America/Chicago
+      GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+      REFRESH_TYPE: ${{ github.event.inputs.refresh_type }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup R
+        uses: r-lib/actions/setup-r@v2
+
+      - name: Install system libs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev libssl-dev libxml2-dev
+
+      - name: Install R packages
+        shell: bash
+        run: |
+          Rscript -e 'install.packages(c(
+            "baseballr","googlesheets4","gargle","dplyr","purrr","tidyr","stringr",
+            "lubridate","janitor","readr","tibble","glue","jsonlite"
+          ), repos = "https://cloud.r-project.org")'
+
+      - name: Write Google service account key
+        shell: bash
+        run: |
+          printf '%s' '${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}' > google-service-account.json
+
+      - name: Run refresh
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/google-service-account.json
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          REFRESH_TYPE: ${{ github.event.inputs.refresh_type }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: Rscript R/run_refresh.R
