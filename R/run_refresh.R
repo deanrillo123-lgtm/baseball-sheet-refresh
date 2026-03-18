@@ -284,9 +284,13 @@ pitch_leaders <- safe_fg_pitch_leaders(season_year)
 
 resolve_player_ids <- function(df) {
   df <- df |> clean_names()
-  if (!"player_name" %in% names(df) && "player" %in% names(df)) {
+  if (!"player_name" %in% names(df)) {
+  if ("player" %in% names(df)) {
     df <- df |> rename(player_name = player)
+  } else if ("Player" %in% names(df)) {
+    df <- df |> rename(player_name = Player)
   }
+}
   if (!"fangraphs_id" %in% names(df)) df$fangraphs_id <- NA
   if (!"mlbid" %in% names(df)) df$mlbid <- NA
   if (!"team" %in% names(df)) df$team <- NA
