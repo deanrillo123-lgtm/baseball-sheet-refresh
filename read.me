@@ -1,0 +1,34 @@
+# baseball-sheet-refresh
+
+GitHub Actions + R + baseballR + Google Sheets.
+
+## Required GitHub secrets
+- GOOGLE_SERVICE_ACCOUNT_JSON
+- GOOGLE_SHEET_ID
+
+## Required Google Sheet tabs
+- test
+- asset_database
+- Free Agent Helper
+- raw_milb_pitchers
+- raw_milb_hitters
+- raw_pitchers
+- raw_hitters
+- asset_scores
+- free_agent_rankings
+- last_update
+
+## Apps Script setup
+In the Google Sheet:
+1. Extensions -> Apps Script
+2. Paste `apps_script/Code.gs`
+3. In Project Settings -> Script Properties add:
+   - GITHUB_OWNER = deanrillo123-lgtm
+   - GITHUB_REPO = baseball-sheet-refresh
+   - GITHUB_WORKFLOW_FILE = baseball-sheet-refresh.yml
+   - GITHUB_BRANCH = main
+   - GITHUB_TOKEN = your GitHub PAT with permission to dispatch workflow runs
+
+## Notes
+- Season-long stats use the previous season until April 1, then switch to the current season.
+- Some MiLB advanced metrics may be `NA` due to source coverage limitations.
