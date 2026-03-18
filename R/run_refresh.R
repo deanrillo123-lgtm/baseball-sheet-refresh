@@ -298,10 +298,10 @@ resolve_player_ids <- function(df) {
   if (!"level" %in% names(df)) df$level <- NA
 
   df <- df |>
-    mutate(
-      fangraphs_id = safe_chr(fangraphs_id),
-      mlbid = safe_chr(mlbid),
-      player_name_clean = norm_name(player_name),
+    mutate(df, 
+       fangraphs_id = safe_chr(fangraphs_id), 
+       mlbid = safe_chr(mlbid), 
+       player_name_clean = norm_name(Player)),
       team_clean = norm_name(team)
     )
 
