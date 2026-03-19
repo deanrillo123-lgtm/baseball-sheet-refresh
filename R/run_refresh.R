@@ -302,7 +302,7 @@ resolve_player_ids <- function(df) {
        fangraphs_id = safe_chr(fangraphs_id), 
        mlbid = safe_chr(mlbid), 
        player_name_clean = norm_name(Player)),
-      team_clean = norm_name(team)
+       team_clean = norm_name(team)
     )
 
   bat_ref <- bat_leaders |>
