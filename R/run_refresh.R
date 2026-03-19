@@ -301,7 +301,7 @@ resolve_player_ids <- function(df) {
   mutate(
     fangraphs_id = safe_chr(fangraphs_id),
     mlbid = safe_chr(mlbid),
-    player_name_clean = norm_name(Player),
+    player_name_clean = norm_name(player_name),
     team_clean = norm_name(team)
   )
 
