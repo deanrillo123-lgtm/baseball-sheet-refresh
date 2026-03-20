@@ -1169,7 +1169,13 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
       risk_score = round(risk_score, 1)
     )
 
+  message(sprintf("  pool: %d rows x %d cols: %s", nrow(pool), ncol(pool), paste(names(pool), collapse = ", ")))
+  message(sprintf("  asset_df: %d rows x %d cols: %s", nrow(asset_df), ncol(asset_df), paste(names(asset_df), collapse = ", ")))
+
+  # Keep only identifying columns from asset_df to avoid name collisions
+  # (the sheet may carry output columns from a previous run)
   out <- asset_df |>
+    select(player, team, level, role, mlbid, fangraphs_id) |>
     mutate(
       mlbid = safe_chr(mlbid),
       fangraphs_id = safe_chr(fangraphs_id),
