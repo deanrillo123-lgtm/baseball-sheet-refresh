@@ -3,6 +3,7 @@ suppressPackageStartupMessages({
   library(googlesheets4)
   library(gargle)
   library(dplyr)
+  library(rlang)
   library(purrr)
   library(tidyr)
   library(stringr)
@@ -16,6 +17,89 @@ suppressPackageStartupMessages({
 
 `%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || all(is.na(x))) y else x
 
+# ============================================================
+# SCORING CONFIGURATION
+# Adjust weights below to change how players are scored.
+# Each group of weights should sum to 1.0.
+# ============================================================
+
+WEIGHTS <- list(
+
+  # MLB Hitters: current_score
+  mlb_h_current = c(
+    xwoba = 0.14, barrel_pct = 0.14, hard_hit_pct = 0.14,
+    bb_minus_k_pct = 0.14, sb = 0.14,
+    hr = 0.06, ops = 0.06, iso = 0.06, xba = 0.06, exit_velocity = 0.06
+  ),
+  # MLB Hitters: trend_score (last 14 days emphasis)
+  mlb_h_trend = c(
+    xwoba = 0.20, barrel_pct = 0.20, hard_hit_pct = 0.15,
+    bb_minus_k_pct = 0.15, sb = 0.10,
+    hr = 0.05, iso = 0.05, exit_velocity = 0.05, ops = 0.05
+  ),
+
+  # MLB Pitchers: current_score
+  mlb_p_current = c(
+    k_minus_bb_pct = 0.14, siera = 0.14, xfip = 0.14,
+    swstr_pct = 0.14, velocity = 0.14,
+    era = 0.06, whip = 0.06, saves_holds = 0.06,
+    hard_hit_pct_against = 0.06, hr_against = 0.06
+  ),
+  # MLB Pitchers: trend_score
+  mlb_p_trend = c(
+    k_minus_bb_pct = 0.20, swstr_pct = 0.20, velocity = 0.15,
+    xfip = 0.15, siera = 0.10,
+    era = 0.05, whip = 0.05, saves_holds = 0.05,
+    hard_hit_pct_against = 0.05
+  ),
+
+  # MiLB Hitters: current_score
+  milb_h_current = c(
+    wrc_plus = 0.14, bb_minus_k_pct = 0.14, iso = 0.14,
+    age_vs_level = 0.14, obp = 0.14,
+    avg = 0.06, hr = 0.06, steals = 0.06, woba = 0.06, pa = 0.06
+  ),
+  # MiLB Hitters: trend_score
+  milb_h_trend = c(
+    wrc_plus = 0.20, iso = 0.20, bb_minus_k_pct = 0.20,
+    obp = 0.10, age_vs_level = 0.10,
+    hr = 0.05, steals = 0.05, avg = 0.05, pa = 0.05
+  ),
+
+  # MiLB Pitchers: current_score
+  milb_p_current = c(
+    k_minus_bb_pct = 0.14, fip = 0.14, xfip = 0.14,
+    siera = 0.14, velocity = 0.14,
+    whip = 0.06, earned_runs = 0.06, hr = 0.06,
+    holds_plus_saves = 0.06, placeholder = 0.06
+  ),
+  # MiLB Pitchers: trend_score
+  milb_p_trend = c(
+    k_minus_bb_pct = 0.20, xfip = 0.20, siera = 0.20,
+    velocity = 0.10, fip = 0.10,
+    whip = 0.05, earned_runs = 0.05, hr = 0.05, placeholder = 0.05
+  )
+)
+
+# Dynasty WAR calculation parameters
+WAR_PARAMS <- list(
+  current_war_score_div  = 12,
+  current_war_risk_div   = 150,
+  dynasty_score_div      = 10,
+  dynasty_risk_div       = 100,
+  future_score_div       = 14,
+  future_risk_div        = 175,
+  prospect_bonus         = 0.75,
+  mlb_prospect_bonus     = 0.15,
+  future_bonus_prospect  = 1.20,
+  future_bonus_mlb       = 0.30,
+  extra_prospect_bump    = 0.35,
+  future_war_multiplier  = 1.5,
+  trade_value_multiplier = 10
+)
+
+# ============================================================
+
 sheet_id <- Sys.getenv("GOOGLE_SHEET_ID")
 svc_file <- Sys.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 refresh_type <- Sys.getenv("REFRESH_TYPE")
@@ -26,22 +110,38 @@ if (svc_file == "") stop("GOOGLE_APPLICATION_CREDENTIALS is missing.")
 
 gs4_auth(path = svc_file)
 
+retry_with_backoff <- function(fn, max_attempts = 3, base_delay = 2) {
+  for (attempt in seq_len(max_attempts)) {
+    result <- tryCatch(fn(), error = function(e) e)
+    if (!inherits(result, "error")) return(result)
+    if (attempt == max_attempts) stop(result)
+    delay <- base_delay * (2 ^ (attempt - 1))
+    message(sprintf("  Retry %d/%d in %ds: %s", attempt, max_attempts, delay, conditionMessage(result)))
+    Sys.sleep(delay)
+  }
+}
+
 safe_read_sheet <- function(tab) {
   tryCatch(
-    read_sheet(sheet_id, sheet = tab) |> clean_names(),
-    error = function(e) tibble()
+    retry_with_backoff(function() read_sheet(sheet_id, sheet = tab) |> clean_names()),
+    error = function(e) {
+      message(sprintf("  Warning: could not read tab '%s': %s", tab, conditionMessage(e)))
+      tibble()
+    }
   )
 }
 
 safe_write_sheet <- function(df, tab) {
   df <- as_tibble(df)
-  tryCatch(
-    sheet_write(df, ss = sheet_id, sheet = tab),
-    error = function(e) {
-      try(sheet_add(sheet_id, tab), silent = TRUE)
-      sheet_write(df, ss = sheet_id, sheet = tab)
-    }
-  )
+  retry_with_backoff(function() {
+    tryCatch(
+      sheet_write(df, ss = sheet_id, sheet = tab),
+      error = function(e) {
+        try(sheet_add(sheet_id, tab), silent = TRUE)
+        sheet_write(df, ss = sheet_id, sheet = tab)
+      }
+    )
+  })
 }
 
 safe_num <- function(x) suppressWarnings(as.numeric(x))
@@ -49,9 +149,21 @@ safe_chr <- function(x) ifelse(is.na(x), NA_character_, as.character(x))
 
 coalesce_col <- function(df, candidates, default = NA) {
   nm <- names(df)
-  hit <- candidates[candidates %in% nm][1]
-  if (length(hit) == 0 || is.na(hit)) return(rep(default, nrow(df)))
-  df[[hit]]
+  nm_lower <- tolower(nm)
+  for (cand in candidates) {
+    idx <- which(nm_lower == tolower(cand))
+    if (length(idx) > 0) return(df[[nm[idx[1]]]])
+  }
+  rep(default, nrow(df))
+}
+
+find_col_by_prefix <- function(df, prefix) {
+  nm <- names(df)
+  exact <- nm[nm == prefix]
+  if (length(exact) > 0) return(exact[1])
+  pattern <- nm[grepl(paste0("^", prefix, "_\\d+$"), nm)]
+  if (length(pattern) > 0) return(pattern[1])
+  NULL
 }
 
 first_non_na <- function(...) {
@@ -279,23 +391,44 @@ safe_fg_pitch_leaders <- function(yr) {
   )
 }
 
+message(sprintf("Fetching FanGraphs leaderboards for %d...", season_year))
 bat_leaders <- safe_fg_bat_leaders(season_year)
+message(sprintf("  Batter leaders: %d rows", nrow(bat_leaders)))
 pitch_leaders <- safe_fg_pitch_leaders(season_year)
+message(sprintf("  Pitcher leaders: %d rows", nrow(pitch_leaders)))
 
 resolve_player_ids <- function(df) {
   df <- df |> clean_names()
-  if (!"player_name" %in% names(df)) {
-  if ("player" %in% names(df)) {
-    df <- df |> rename(player_name = player)
-  } else if ("Player" %in% names(df)) {
-    df <- df |> rename(player_name = Player)
+  nm <- names(df)
+
+  # Find the player name column (handles name, player_name, player, plus
+  # suffixed variants like name_1 that appear with duplicate sheet columns)
+  name_col <- NULL
+  for (cand in c("player_name", "player", "name")) {
+    found <- find_col_by_prefix(df, cand)
+    if (!is.null(found)) { name_col <- found; break }
   }
-}
-  if (!"fangraphs_id" %in% names(df)) df$fangraphs_id <- NA
-  if (!"mlbid" %in% names(df)) df$mlbid <- NA
-  if (!"team" %in% names(df)) df$team <- NA
-  if (!"role" %in% names(df)) df$role <- NA
-  if (!"level" %in% names(df)) df$level <- NA
+  if (!is.null(name_col) && name_col != "player_name") {
+    df <- df |> rename(player_name = !!sym(name_col))
+  }
+  if (is.null(name_col)) stop("Cannot find player name column in test tab. Expected one of: player_name, player, name")
+
+  # Find ID and metadata columns, handling numeric suffixes from
+  # duplicate sheet columns (e.g. mlbid_2 instead of mlbid)
+  col_defaults <- list(
+    fangraphs_id = NA, mlbid = NA, team = NA,
+    role = NA, level = NA, position = NA, age = NA
+  )
+  for (col_name in names(col_defaults)) {
+    if (!col_name %in% names(df)) {
+      found <- find_col_by_prefix(df, col_name)
+      if (!is.null(found)) {
+        df <- df |> rename(!!col_name := !!sym(found))
+      } else {
+        df[[col_name]] <- col_defaults[[col_name]]
+      }
+    }
+  }
 
   df <- df |>
   mutate(
@@ -307,21 +440,21 @@ resolve_player_ids <- function(df) {
 
   bat_ref <- bat_leaders |>
     transmute(
-      fg_ref = safe_chr(coalesce_col(cur_data(), c("playerid"))),
-      mlb_ref = safe_chr(coalesce_col(cur_data(), c("playeridmlb", "playerid_mlb", "mlbid"))),
-      name_ref = norm_name(coalesce_col(cur_data(), c("name", "player_name"))),
-      team_ref = norm_name(coalesce_col(cur_data(), c("team", "team_name", "teamid"))),
-      age_ref = safe_num(coalesce_col(cur_data(), c("age"))),
-      pos_ref = safe_chr(coalesce_col(cur_data(), c("pos")))
+      fg_ref = safe_chr(coalesce_col(pick(everything()), c("playerid"))),
+      mlb_ref = safe_chr(coalesce_col(pick(everything()), c("playeridmlb", "playerid_mlb", "mlbid"))),
+      name_ref = norm_name(coalesce_col(pick(everything()), c("name", "player_name"))),
+      team_ref = norm_name(coalesce_col(pick(everything()), c("team", "team_name", "teamid"))),
+      age_ref = safe_num(coalesce_col(pick(everything()), c("age"))),
+      pos_ref = safe_chr(coalesce_col(pick(everything()), c("pos")))
     )
 
   pitch_ref <- pitch_leaders |>
     transmute(
-      fg_ref = safe_chr(coalesce_col(cur_data(), c("playerid"))),
-      mlb_ref = safe_chr(coalesce_col(cur_data(), c("playeridmlb", "playerid_mlb", "mlbid"))),
-      name_ref = norm_name(coalesce_col(cur_data(), c("name", "player_name"))),
-      team_ref = norm_name(coalesce_col(cur_data(), c("team", "team_name", "teamid"))),
-      age_ref = safe_num(coalesce_col(cur_data(), c("age"))),
+      fg_ref = safe_chr(coalesce_col(pick(everything()), c("playerid"))),
+      mlb_ref = safe_chr(coalesce_col(pick(everything()), c("playeridmlb", "playerid_mlb", "mlbid"))),
+      name_ref = norm_name(coalesce_col(pick(everything()), c("name", "player_name"))),
+      team_ref = norm_name(coalesce_col(pick(everything()), c("team", "team_name", "teamid"))),
+      age_ref = safe_num(coalesce_col(pick(everything()), c("age"))),
       pos_ref = "P"
     )
 
@@ -353,7 +486,7 @@ resolve_player_ids <- function(df) {
 agg_hitter_logs <- function(logs, start_date = NULL, end_date = NULL) {
   if (nrow(logs) == 0) return(tibble())
   logs <- logs |>
-    mutate(gamedate2 = as.Date(coalesce_col(cur_data(), c("gamedate", "date"))))
+    mutate(gamedate2 = as.Date(coalesce_col(pick(everything()), c("gamedate", "date"))))
   if (!is.null(start_date)) logs <- logs |> filter(gamedate2 >= as.Date(start_date))
   if (!is.null(end_date)) logs <- logs |> filter(gamedate2 <= as.Date(end_date))
   if (nrow(logs) == 0) return(tibble())
@@ -372,13 +505,13 @@ agg_hitter_logs <- function(logs, start_date = NULL, end_date = NULL) {
     slg = mean_or_na(coalesce_col(logs, c("slg"))),
     ops = mean_or_na(coalesce_col(logs, c("ops"))),
     iso = mean_or_na(coalesce_col(logs, c("iso"))),
-    woba = mean_or_na(coalesce_col(logs, c("woba"))),
-    bb_pct = mean_or_na(coalesce_col(logs, c("bb%"))),
-    k_pct = mean_or_na(coalesce_col(logs, c("k%"))),
-    wrc_plus = mean_or_na(coalesce_col(logs, c("wrc+"))),
-    hard_hit_pct = mean_or_na(coalesce_col(logs, c("hardhit%", "hard%"))),
-    barrel_pct = mean_or_na(coalesce_col(logs, c("barrel%", "barrels_per_bbe"))),
-    exit_velocity = mean_or_na(coalesce_col(logs, c("ev", "maxev"))),
+    woba = mean_or_na(coalesce_col(logs, c("w_oba", "woba"))),
+    bb_pct = mean_or_na(coalesce_col(logs, c("bb_percent", "bb_pct", "bb%"))),
+    k_pct = mean_or_na(coalesce_col(logs, c("k_percent", "k_pct", "k%"))),
+    wrc_plus = mean_or_na(coalesce_col(logs, c("w_rc", "wrc_plus", "wrc+", "wrc"))),
+    hard_hit_pct = mean_or_na(coalesce_col(logs, c("hard_hit_percent", "hard_percent", "hardhit%", "hard%"))),
+    barrel_pct = mean_or_na(coalesce_col(logs, c("barrel_percent", "barrel%", "barrels_per_bbe"))),
+    exit_velocity = mean_or_na(coalesce_col(logs, c("ev", "max_ev", "maxev"))),
     age = mean_or_na(coalesce_col(logs, c("age"))),
     team = mode_chr(coalesce_col(logs, c("team"))),
     level = mode_chr(coalesce_col(logs, c("level", "league"))),
@@ -389,7 +522,7 @@ agg_hitter_logs <- function(logs, start_date = NULL, end_date = NULL) {
 agg_pitcher_logs <- function(logs, start_date = NULL, end_date = NULL) {
   if (nrow(logs) == 0) return(tibble())
   logs <- logs |>
-    mutate(gamedate2 = as.Date(coalesce_col(cur_data(), c("gamedate", "date"))))
+    mutate(gamedate2 = as.Date(coalesce_col(pick(everything()), c("gamedate", "date"))))
   if (!is.null(start_date)) logs <- logs |> filter(gamedate2 >= as.Date(start_date))
   if (!is.null(end_date)) logs <- logs |> filter(gamedate2 <= as.Date(end_date))
   if (nrow(logs) == 0) return(tibble())
@@ -407,14 +540,14 @@ agg_pitcher_logs <- function(logs, start_date = NULL, end_date = NULL) {
     fip = mean_or_na(coalesce_col(logs, c("fip"))),
     xfip = mean_or_na(coalesce_col(logs, c("xfip"))),
     siera = mean_or_na(coalesce_col(logs, c("siera"))),
-    k_pct = mean_or_na(coalesce_col(logs, c("k%"))),
-    bb_pct = mean_or_na(coalesce_col(logs, c("bb%"))),
-    k_minus_bb_pct = mean_or_na(coalesce_col(logs, c("k-bb%"))),
-    swstr_pct = mean_or_na(coalesce_col(logs, c("swstr%"))),
-    hard_hit_pct_against = mean_or_na(coalesce_col(logs, c("hardhit%", "hard%"))),
-    barrel_pct_against = mean_or_na(coalesce_col(logs, c("barrel%"))),
+    k_pct = mean_or_na(coalesce_col(logs, c("k_percent", "k_pct", "k%"))),
+    bb_pct = mean_or_na(coalesce_col(logs, c("bb_percent", "bb_pct", "bb%"))),
+    k_minus_bb_pct = mean_or_na(coalesce_col(logs, c("k_bb_percent", "k_minus_bb_pct", "k-bb%"))),
+    swstr_pct = mean_or_na(coalesce_col(logs, c("sw_str_percent", "swstr_percent", "swstr%"))),
+    hard_hit_pct_against = mean_or_na(coalesce_col(logs, c("hard_hit_percent", "hard_percent", "hardhit%", "hard%"))),
+    barrel_pct_against = mean_or_na(coalesce_col(logs, c("barrel_percent", "barrel%", "barrels_per_bbe"))),
     exit_velocity_against = mean_or_na(coalesce_col(logs, c("ev"))),
-    velo = mean_or_na(coalesce_col(logs, c("fbv", "vfa"))),
+    velo = mean_or_na(coalesce_col(logs, c("fbv", "v_fa", "vfa"))),
     saves_holds = sum_or_na(coalesce_col(logs, c("sv"))) + sum_or_na(coalesce_col(logs, c("hld"))),
     age = mean_or_na(coalesce_col(logs, c("age"))),
     team = mode_chr(coalesce_col(logs, c("team"))),
@@ -423,11 +556,15 @@ agg_pitcher_logs <- function(logs, start_date = NULL, end_date = NULL) {
 }
 
 build_raw_mlb_hitters <- function(players) {
-  out <- players |>
-    filter(level == "MLB", role == "H") |>
+  pool <- players |> filter(level == "MLB", role == "H")
+  n_total <- nrow(pool)
+  message(sprintf("Building raw MLB hitters: %d players", n_total))
+  out <- pool |>
     mutate(row_id = row_number()) |>
     group_split(row_id, .keep = TRUE) |>
     map_dfr(function(p) {
+      if (p$row_id[[1]] > 1) Sys.sleep(0.5)
+      message(sprintf("  [%d/%d] %s", p$row_id[[1]], n_total, p$player_name[[1]]))
       logs <- safe_fg_batter_logs(p$fangraphs_id[[1]], season_year)
       t14 <- agg_hitter_logs(logs, t14_start, t14_end)
       season <- agg_hitter_logs(logs)
@@ -513,11 +650,15 @@ build_raw_mlb_hitters <- function(players) {
 }
 
 build_raw_mlb_pitchers <- function(players) {
-  out <- players |>
-    filter(level == "MLB", role == "P") |>
+  pool <- players |> filter(level == "MLB", role == "P")
+  n_total <- nrow(pool)
+  message(sprintf("Building raw MLB pitchers: %d players", n_total))
+  out <- pool |>
     mutate(row_id = row_number()) |>
     group_split(row_id, .keep = TRUE) |>
     map_dfr(function(p) {
+      if (p$row_id[[1]] > 1) Sys.sleep(0.5)
+      message(sprintf("  [%d/%d] %s", p$row_id[[1]], n_total, p$player_name[[1]]))
       logs <- safe_fg_pitcher_logs(p$fangraphs_id[[1]], season_year)
       t14 <- agg_pitcher_logs(logs, t14_start, t14_end)
       season <- agg_pitcher_logs(logs)
@@ -599,11 +740,15 @@ build_raw_mlb_pitchers <- function(players) {
 }
 
 build_raw_milb_hitters <- function(players) {
-  out <- players |>
-    filter(level == "MiLB", role == "H") |>
+  pool <- players |> filter(level == "MiLB", role == "H")
+  n_total <- nrow(pool)
+  message(sprintf("Building raw MiLB hitters: %d players", n_total))
+  out <- pool |>
     mutate(row_id = row_number()) |>
     group_split(row_id, .keep = TRUE) |>
     map_dfr(function(p) {
+      if (p$row_id[[1]] > 1) Sys.sleep(0.5)
+      message(sprintf("  [%d/%d] %s", p$row_id[[1]], n_total, p$player_name[[1]]))
       logs <- safe_fg_milb_batter_logs(p$fangraphs_id[[1]], season_year)
       t14 <- agg_hitter_logs(logs, t14_start, t14_end)
       season <- agg_hitter_logs(logs)
@@ -691,11 +836,15 @@ build_raw_milb_hitters <- function(players) {
 }
 
 build_raw_milb_pitchers <- function(players) {
-  out <- players |>
-    filter(level == "MiLB", role == "P") |>
+  pool <- players |> filter(level == "MiLB", role == "P")
+  n_total <- nrow(pool)
+  message(sprintf("Building raw MiLB pitchers: %d players", n_total))
+  out <- pool |>
     mutate(row_id = row_number()) |>
     group_split(row_id, .keep = TRUE) |>
     map_dfr(function(p) {
+      if (p$row_id[[1]] > 1) Sys.sleep(0.5)
+      message(sprintf("  [%d/%d] %s", p$row_id[[1]], n_total, p$player_name[[1]]))
       logs <- safe_fg_milb_pitcher_logs(p$fangraphs_id[[1]], season_year)
       t14 <- agg_pitcher_logs(logs, t14_start, t14_end)
       season <- agg_pitcher_logs(logs)
@@ -775,13 +924,29 @@ build_raw_milb_pitchers <- function(players) {
 
 compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_hitters, raw_milb_pitchers) {
   asset_df <- asset_df |> clean_names()
-  if (!"player" %in% names(asset_df) && "player_name" %in% names(asset_df)) asset_df <- asset_df |> rename(player = player_name)
-  if (!"team" %in% names(asset_df)) asset_df$team <- NA
-  if (!"level" %in% names(asset_df)) asset_df$level <- NA
-  if (!"role" %in% names(asset_df)) asset_df$role <- NA
-  if (!"mlbid" %in% names(asset_df)) asset_df$mlbid <- NA
-  if (!"fangraphs_id" %in% names(asset_df)) asset_df$fangraphs_id <- NA
 
+  # Find player name column
+  if (!"player" %in% names(asset_df)) {
+    for (cand in c("player_name", "name")) {
+      found <- find_col_by_prefix(asset_df, cand)
+      if (!is.null(found)) { asset_df <- asset_df |> rename(player = !!sym(found)); break }
+    }
+  }
+
+  # Find other columns, handling numeric suffixes from duplicate sheet columns
+  for (col_name in c("team", "level", "role", "mlbid", "fangraphs_id")) {
+    if (!col_name %in% names(asset_df)) {
+      found <- find_col_by_prefix(asset_df, col_name)
+      if (!is.null(found)) {
+        asset_df <- asset_df |> rename(!!col_name := !!sym(found))
+      } else {
+        asset_df[[col_name]] <- NA
+      }
+    }
+  }
+
+  wh <- WEIGHTS$mlb_h_current
+  wht <- WEIGHTS$mlb_h_trend
   mlb_h <- raw_hitters |>
     transmute(
       player = name, team, mlbid, fangraphs_id,
@@ -796,38 +961,40 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
       core_4_name = "BB%-K%",
       core_5_name = "SB",
       current_score = (
-        0.14 * season_xwoba_pctile +
-        0.14 * season_barrel_pct_pctile +
-        0.14 * season_hard_hit_pct_pctile +
-        0.14 * season_bb_minus_k_pct_pctile +
-        0.14 * season_sb_pctile +
-        0.06 * season_hr_pctile +
-        0.06 * season_ops_pctile +
-        0.06 * season_iso_pctile +
-        0.06 * season_xba_pctile +
-        0.06 * season_exit_velocity_pctile
+        wh[["xwoba"]] * season_xwoba_pctile +
+        wh[["barrel_pct"]] * season_barrel_pct_pctile +
+        wh[["hard_hit_pct"]] * season_hard_hit_pct_pctile +
+        wh[["bb_minus_k_pct"]] * season_bb_minus_k_pct_pctile +
+        wh[["sb"]] * season_sb_pctile +
+        wh[["hr"]] * season_hr_pctile +
+        wh[["ops"]] * season_ops_pctile +
+        wh[["iso"]] * season_iso_pctile +
+        wh[["xba"]] * season_xba_pctile +
+        wh[["exit_velocity"]] * season_exit_velocity_pctile
       ),
       trend_score = (
-        0.20 * t14_xwoba_pctile +
-        0.20 * t14_barrel_pct_pctile +
-        0.15 * t14_hard_hit_pct_pctile +
-        0.15 * t14_bb_minus_k_pct_pctile +
-        0.10 * t14_sb_pctile +
-        0.05 * t14_hr_pctile +
-        0.05 * t14_iso_pctile +
-        0.05 * t14_exit_velocity_pctile +
-        0.05 * t14_ops_pctile
+        wht[["xwoba"]] * t14_xwoba_pctile +
+        wht[["barrel_pct"]] * t14_barrel_pct_pctile +
+        wht[["hard_hit_pct"]] * t14_hard_hit_pct_pctile +
+        wht[["bb_minus_k_pct"]] * t14_bb_minus_k_pct_pctile +
+        wht[["sb"]] * t14_sb_pctile +
+        wht[["hr"]] * t14_hr_pctile +
+        wht[["iso"]] * t14_iso_pctile +
+        wht[["exit_velocity"]] * t14_exit_velocity_pctile +
+        wht[["ops"]] * t14_ops_pctile
       ),
       risk_score = (
         0.30 * percentile_rank(season_k_pct, FALSE) +
         0.25 * abs(t14_xwoba_pctile - season_xwoba_pctile) +
         0.15 * percentile_rank(season_hard_hit_pct, FALSE) +
         0.15 * percentile_rank(season_bb_pct, FALSE) +
-        0.15 * percentile_rank(season_sb, FALSE)
+        0.15 * abs(t14_ops_pctile - season_ops_pctile)
       ),
       bucket = "MLB_H"
     )
 
+  wp <- WEIGHTS$mlb_p_current
+  wpt <- WEIGHTS$mlb_p_trend
   mlb_p <- raw_pitchers |>
     transmute(
       player = name, team, mlbid, fangraphs_id,
@@ -842,27 +1009,27 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
       core_4_name = "SwStr%",
       core_5_name = "Velocity",
       current_score = (
-        0.14 * season_k_minus_bb_pct_pctile +
-        0.14 * season_siera_pctile +
-        0.14 * season_xfip_pctile +
-        0.14 * season_swstr_pct_pctile +
-        0.14 * season_velocity_pctile +
-        0.06 * season_era_pctile +
-        0.06 * season_whip_pctile +
-        0.06 * season_saves_holds_pctile +
-        0.06 * season_hard_hit_pct_against_pctile +
-        0.06 * season_hr_against_pctile
+        wp[["k_minus_bb_pct"]] * season_k_minus_bb_pct_pctile +
+        wp[["siera"]] * season_siera_pctile +
+        wp[["xfip"]] * season_xfip_pctile +
+        wp[["swstr_pct"]] * season_swstr_pct_pctile +
+        wp[["velocity"]] * season_velocity_pctile +
+        wp[["era"]] * season_era_pctile +
+        wp[["whip"]] * season_whip_pctile +
+        wp[["saves_holds"]] * season_saves_holds_pctile +
+        wp[["hard_hit_pct_against"]] * season_hard_hit_pct_against_pctile +
+        wp[["hr_against"]] * season_hr_against_pctile
       ),
       trend_score = (
-        0.20 * t14_k_minus_bb_pct_pctile +
-        0.20 * t14_swstr_pct_pctile +
-        0.15 * t14_velocity_pctile +
-        0.15 * t14_xfip_pctile +
-        0.10 * t14_siera_pctile +
-        0.05 * t14_era_pctile +
-        0.05 * t14_whip_pctile +
-        0.05 * t14_saves_holds_pctile +
-        0.05 * t14_hard_hit_pct_against_pctile
+        wpt[["k_minus_bb_pct"]] * t14_k_minus_bb_pct_pctile +
+        wpt[["swstr_pct"]] * t14_swstr_pct_pctile +
+        wpt[["velocity"]] * t14_velocity_pctile +
+        wpt[["xfip"]] * t14_xfip_pctile +
+        wpt[["siera"]] * t14_siera_pctile +
+        wpt[["era"]] * t14_era_pctile +
+        wpt[["whip"]] * t14_whip_pctile +
+        wpt[["saves_holds"]] * t14_saves_holds_pctile +
+        wpt[["hard_hit_pct_against"]] * t14_hard_hit_pct_against_pctile
       ),
       risk_score = (
         0.30 * percentile_rank(season_bb_pct, TRUE) +
@@ -874,6 +1041,8 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
       bucket = "MLB_P"
     )
 
+  wmh <- WEIGHTS$milb_h_current
+  wmht <- WEIGHTS$milb_h_trend
   milb_h <- raw_milb_hitters |>
     transmute(
       player = name, team, mlbid, fangraphs_id,
@@ -888,27 +1057,27 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
       core_4_name = "AgeVsLevel",
       core_5_name = "OBP",
       current_score = (
-        0.14 * season_wrc_plus_pctile +
-        0.14 * season_bb_minus_k_pct_pctile +
-        0.14 * season_iso_pctile +
-        0.14 * 50 +
-        0.14 * season_obp_pctile +
-        0.06 * season_avg_pctile +
-        0.06 * season_hr_pctile +
-        0.06 * season_steals_pctile +
-        0.06 * season_woba_pctile +
-        0.06 * season_pa_pctile
+        wmh[["wrc_plus"]] * season_wrc_plus_pctile +
+        wmh[["bb_minus_k_pct"]] * season_bb_minus_k_pct_pctile +
+        wmh[["iso"]] * season_iso_pctile +
+        wmh[["age_vs_level"]] * 50 +
+        wmh[["obp"]] * season_obp_pctile +
+        wmh[["avg"]] * season_avg_pctile +
+        wmh[["hr"]] * season_hr_pctile +
+        wmh[["steals"]] * season_steals_pctile +
+        wmh[["woba"]] * season_woba_pctile +
+        wmh[["pa"]] * season_pa_pctile
       ),
       trend_score = (
-        0.20 * t14_wrc_plus_pctile +
-        0.20 * t14_iso_pctile +
-        0.20 * t14_bb_minus_k_pct_pctile +
-        0.10 * percentile_rank(t14_obp, TRUE) +
-        0.10 * 50 +
-        0.05 * t14_hr_pctile +
-        0.05 * t14_steals_pctile +
-        0.05 * t14_avg_pctile +
-        0.05 * t14_pa_pctile
+        wmht[["wrc_plus"]] * t14_wrc_plus_pctile +
+        wmht[["iso"]] * t14_iso_pctile +
+        wmht[["bb_minus_k_pct"]] * t14_bb_minus_k_pct_pctile +
+        wmht[["obp"]] * percentile_rank(t14_obp, TRUE) +
+        wmht[["age_vs_level"]] * 50 +
+        wmht[["hr"]] * t14_hr_pctile +
+        wmht[["steals"]] * t14_steals_pctile +
+        wmht[["avg"]] * t14_avg_pctile +
+        wmht[["pa"]] * t14_pa_pctile
       ),
       risk_score = (
         0.30 * percentile_rank(season_k_pct, TRUE) +
@@ -920,6 +1089,8 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
       bucket = "MiLB_H"
     )
 
+  wmp <- WEIGHTS$milb_p_current
+  wmpt <- WEIGHTS$milb_p_trend
   milb_p <- raw_milb_pitchers |>
     transmute(
       player = name, team, mlbid, fangraphs_id,
@@ -934,27 +1105,27 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
       core_4_name = "SIERA",
       core_5_name = "Velocity",
       current_score = (
-        0.14 * season_k_minus_bb_pct_pctile +
-        0.14 * season_fip_pctile +
-        0.14 * season_xfip_pctile +
-        0.14 * season_siera_pctile +
-        0.14 * season_throwing_velocity_pctile +
-        0.06 * season_whip_pctile +
-        0.06 * percentile_rank(season_earned_runs, FALSE) +
-        0.06 * percentile_rank(season_hr, FALSE) +
-        0.06 * season_holds_plus_saves_pctile +
-        0.06 * 50
+        wmp[["k_minus_bb_pct"]] * season_k_minus_bb_pct_pctile +
+        wmp[["fip"]] * season_fip_pctile +
+        wmp[["xfip"]] * season_xfip_pctile +
+        wmp[["siera"]] * season_siera_pctile +
+        wmp[["velocity"]] * season_throwing_velocity_pctile +
+        wmp[["whip"]] * season_whip_pctile +
+        wmp[["earned_runs"]] * percentile_rank(season_earned_runs, FALSE) +
+        wmp[["hr"]] * percentile_rank(season_hr, FALSE) +
+        wmp[["holds_plus_saves"]] * season_holds_plus_saves_pctile +
+        wmp[["placeholder"]] * 50
       ),
       trend_score = (
-        0.20 * t14_k_minus_bb_pct_pctile +
-        0.20 * t14_xfip_pctile +
-        0.20 * t14_siera_pctile +
-        0.10 * t14_throwing_velocity_pctile +
-        0.10 * t14_fip_pctile +
-        0.05 * t14_whip_pctile +
-        0.05 * percentile_rank(t14_earned_runs, FALSE) +
-        0.05 * percentile_rank(t14_hr, FALSE) +
-        0.05 * 50
+        wmpt[["k_minus_bb_pct"]] * t14_k_minus_bb_pct_pctile +
+        wmpt[["xfip"]] * t14_xfip_pctile +
+        wmpt[["siera"]] * t14_siera_pctile +
+        wmpt[["velocity"]] * t14_throwing_velocity_pctile +
+        wmpt[["fip"]] * t14_fip_pctile +
+        wmpt[["whip"]] * t14_whip_pctile +
+        wmpt[["earned_runs"]] * percentile_rank(t14_earned_runs, FALSE) +
+        wmpt[["hr"]] * percentile_rank(t14_hr, FALSE) +
+        wmpt[["placeholder"]] * 50
       ),
       risk_score = (
         0.30 * percentile_rank(season_bb_pct, TRUE) +
@@ -985,16 +1156,16 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
       player_clean = norm_name(player),
       team_clean = norm_name(team)
     ) |>
-    left_join(pool, by = c("player_clean", "team_clean")) |>
+    left_join(pool |> select(-player, -team, -mlbid, -fangraphs_id), by = c("player_clean", "team_clean")) |>
     mutate(
-      prospect_bonus = case_when(level == "MiLB" ~ 0.75, TRUE ~ 0.15),
-      future_bonus = case_when(level == "MiLB" ~ 1.20, TRUE ~ 0.30),
-      extra_prospect_bump = case_when(level == "MiLB" ~ 0.35, TRUE ~ 0.00),
-      current_war = round((current_score / 12) - (risk_score / 150), 2),
-      future_war = round((trend_score / 14) + future_bonus - (risk_score / 175), 2),
-      dynasty_war = round((current_score / 10) + prospect_bonus - (risk_score / 100), 2),
-      dynasty_war_3yr = round(current_war + (future_war * 1.5) + extra_prospect_bump, 2),
-      trade_value = round(dynasty_war_3yr * 10, 0)
+      prospect_bonus = case_when(level == "MiLB" ~ WAR_PARAMS$prospect_bonus, TRUE ~ WAR_PARAMS$mlb_prospect_bonus),
+      future_bonus = case_when(level == "MiLB" ~ WAR_PARAMS$future_bonus_prospect, TRUE ~ WAR_PARAMS$future_bonus_mlb),
+      extra_prospect_bump = case_when(level == "MiLB" ~ WAR_PARAMS$extra_prospect_bump, TRUE ~ 0.00),
+      current_war = round((current_score / WAR_PARAMS$current_war_score_div) - (risk_score / WAR_PARAMS$current_war_risk_div), 2),
+      future_war = round((trend_score / WAR_PARAMS$future_score_div) + future_bonus - (risk_score / WAR_PARAMS$future_risk_div), 2),
+      dynasty_war = round((current_score / WAR_PARAMS$dynasty_score_div) + prospect_bonus - (risk_score / WAR_PARAMS$dynasty_risk_div), 2),
+      dynasty_war_3yr = round(current_war + (future_war * WAR_PARAMS$future_war_multiplier) + extra_prospect_bump, 2),
+      trade_value = round(dynasty_war_3yr * WAR_PARAMS$trade_value_multiplier, 0)
     ) |>
     select(
       player, team, level, role, mlbid, fangraphs_id,
@@ -1025,43 +1196,59 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
 
 compute_free_agents <- function(fa_df, raw_hitters, raw_pitchers) {
   fa_df <- fa_df |> clean_names()
-  if (!"player" %in% names(fa_df) && "player_name" %in% names(fa_df)) fa_df <- fa_df |> rename(player = player_name)
-  if (!"team" %in% names(fa_df)) fa_df$team <- NA
-  if (!"position" %in% names(fa_df)) fa_df$position <- NA
-  if (!"level" %in% names(fa_df)) fa_df$level <- "MLB"
 
+  if (!"player" %in% names(fa_df)) {
+    for (cand in c("player_name", "name")) {
+      found <- find_col_by_prefix(fa_df, cand)
+      if (!is.null(found)) { fa_df <- fa_df |> rename(player = !!sym(found)); break }
+    }
+  }
+
+  for (col_name in c("team", "position", "level")) {
+    if (!col_name %in% names(fa_df)) {
+      found <- find_col_by_prefix(fa_df, col_name)
+      if (!is.null(found)) {
+        fa_df <- fa_df |> rename(!!col_name := !!sym(found))
+      } else {
+        fa_df[[col_name]] <- if (col_name == "level") "MLB" else NA
+      }
+    }
+  }
+
+  wh <- WEIGHTS$mlb_h_current
   hit_pool <- raw_hitters |>
     transmute(
       player = name, team, age, position = "H",
       score = round(
-        0.14 * season_xwoba_pctile +
-        0.14 * season_barrel_pct_pctile +
-        0.14 * season_hard_hit_pct_pctile +
-        0.14 * season_bb_minus_k_pct_pctile +
-        0.14 * season_sb_pctile +
-        0.06 * season_hr_pctile +
-        0.06 * season_ops_pctile +
-        0.06 * season_iso_pctile +
-        0.06 * season_xba_pctile +
-        0.06 * season_exit_velocity_pctile,
+        wh[["xwoba"]] * season_xwoba_pctile +
+        wh[["barrel_pct"]] * season_barrel_pct_pctile +
+        wh[["hard_hit_pct"]] * season_hard_hit_pct_pctile +
+        wh[["bb_minus_k_pct"]] * season_bb_minus_k_pct_pctile +
+        wh[["sb"]] * season_sb_pctile +
+        wh[["hr"]] * season_hr_pctile +
+        wh[["ops"]] * season_ops_pctile +
+        wh[["iso"]] * season_iso_pctile +
+        wh[["xba"]] * season_xba_pctile +
+        wh[["exit_velocity"]] * season_exit_velocity_pctile,
         1
       )
     )
 
+  wp <- WEIGHTS$mlb_p_current
   pitch_pool <- raw_pitchers |>
     transmute(
       player = name, team, age, position = "P",
       score = round(
-        0.14 * season_k_minus_bb_pct_pctile +
-        0.14 * season_siera_pctile +
-        0.14 * season_xfip_pctile +
-        0.14 * season_swstr_pct_pctile +
-        0.14 * season_velocity_pctile +
-        0.06 * season_era_pctile +
-        0.06 * season_whip_pctile +
-        0.06 * season_saves_holds_pctile +
-        0.06 * season_hard_hit_pct_against_pctile +
-        0.06 * season_hr_against_pctile,
+        wp[["k_minus_bb_pct"]] * season_k_minus_bb_pct_pctile +
+        wp[["siera"]] * season_siera_pctile +
+        wp[["xfip"]] * season_xfip_pctile +
+        wp[["swstr_pct"]] * season_swstr_pct_pctile +
+        wp[["velocity"]] * season_velocity_pctile +
+        wp[["era"]] * season_era_pctile +
+        wp[["whip"]] * season_whip_pctile +
+        wp[["saves_holds"]] * season_saves_holds_pctile +
+        wp[["hard_hit_pct_against"]] * season_hard_hit_pct_against_pctile +
+        wp[["hr_against"]] * season_hr_against_pctile,
         1
       )
     )
@@ -1072,7 +1259,7 @@ compute_free_agents <- function(fa_df, raw_hitters, raw_pitchers) {
   fa_df |>
     filter(level == "MLB" | is.na(level) | level == "") |>
     mutate(player_clean = norm_name(player), team_clean = norm_name(team)) |>
-    left_join(pool, by = c("player_clean", "team_clean")) |>
+    left_join(pool |> select(-player, -team, -age), by = c("player_clean", "team_clean")) |>
     transmute(
       name = player,
       team = team,
@@ -1086,35 +1273,58 @@ compute_free_agents <- function(fa_df, raw_hitters, raw_pitchers) {
 
 main <- function() {
   started_at <- with_tz(now("America/Chicago"), "America/Chicago")
+  message(sprintf("=== Fantasy Baseball Dashboard Refresh ==="))
+  message(sprintf("Season year: %d | Refresh type: %s", season_year, refresh_type))
+  message(sprintf("T14 window: %s to %s", t14_start, t14_end))
 
+  message("Reading input tabs from Google Sheets...")
   test_tab <- safe_read_sheet("test")
+  message(sprintf("  test: %d rows x %d cols", nrow(test_tab), ncol(test_tab)))
   asset_tab <- safe_read_sheet("asset_database")
+  message(sprintf("  asset_database: %d rows x %d cols", nrow(asset_tab), ncol(asset_tab)))
   fa_tab <- safe_read_sheet("Free Agent Helper")
+  message(sprintf("  Free Agent Helper: %d rows x %d cols", nrow(fa_tab), ncol(fa_tab)))
 
+  message("Resolving player IDs against FanGraphs leaderboards...")
   test_players <- resolve_player_ids(test_tab)
+  message(sprintf("  Resolved %d players (%d H, %d P)",
+    nrow(test_players),
+    sum(test_players$role == "H", na.rm = TRUE),
+    sum(test_players$role == "P", na.rm = TRUE)
+  ))
 
   raw_hitters <- build_raw_mlb_hitters(test_players)
   raw_pitchers <- build_raw_mlb_pitchers(test_players)
   raw_milb_hitters <- build_raw_milb_hitters(test_players)
   raw_milb_pitchers <- build_raw_milb_pitchers(test_players)
 
+  message("Computing asset scores and free agent rankings...")
   asset_scores <- compute_asset_scores(asset_tab, raw_hitters, raw_pitchers, raw_milb_hitters, raw_milb_pitchers)
   free_agents <- compute_free_agents(fa_tab, raw_hitters, raw_pitchers)
+  message(sprintf("  Asset scores: %d rows | Free agents: %d rows", nrow(asset_scores), nrow(free_agents)))
 
+  message("Writing output tabs to Google Sheets...")
   safe_write_sheet(raw_hitters, "raw_hitters")
+  message(sprintf("  raw_hitters: %d rows", nrow(raw_hitters)))
   safe_write_sheet(raw_pitchers, "raw_pitchers")
+  message(sprintf("  raw_pitchers: %d rows", nrow(raw_pitchers)))
   safe_write_sheet(raw_milb_hitters, "raw_milb_hitters")
+  message(sprintf("  raw_milb_hitters: %d rows", nrow(raw_milb_hitters)))
   safe_write_sheet(raw_milb_pitchers, "raw_milb_pitchers")
+  message(sprintf("  raw_milb_pitchers: %d rows", nrow(raw_milb_pitchers)))
   safe_write_sheet(asset_scores, "asset_scores")
+  message(sprintf("  asset_scores: %d rows", nrow(asset_scores)))
   safe_write_sheet(free_agents, "free_agent_rankings")
+  message(sprintf("  free_agent_rankings: %d rows", nrow(free_agents)))
 
   finished_at <- with_tz(now("America/Chicago"), "America/Chicago")
+  duration <- round(as.numeric(difftime(finished_at, started_at, units = "mins")), 2)
   last_update <- tibble(
     refresh_status = "success",
     refresh_type = refresh_type,
     started_at = as.character(started_at),
     finished_at = as.character(finished_at),
-    duration_minutes = round(as.numeric(difftime(finished_at, started_at, units = "mins")), 2),
+    duration_minutes = duration,
     season_year_used = season_year,
     raw_hitters_rows = nrow(raw_hitters),
     raw_pitchers_rows = nrow(raw_pitchers),
@@ -1125,6 +1335,7 @@ main <- function() {
     notes = "Percentiles added to raw tabs and asset scores. Unsupported source fields remain NA."
   )
   safe_write_sheet(last_update, "last_update")
+  message(sprintf("=== Refresh complete in %.1f minutes ===", duration))
 }
 
 tryCatch(
