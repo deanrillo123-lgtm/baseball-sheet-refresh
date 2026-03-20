@@ -273,6 +273,8 @@ add_percentiles <- function(df, metric_map) {
   for (nm in names(metric_map)) {
     if (nm %in% names(out)) {
       out[[paste0(nm, "_pctile")]] <- percentile_rank(out[[nm]], higher_is_better = metric_map[[nm]])
+    } else {
+      out[[paste0(nm, "_pctile")]] <- NA_real_
     }
   }
   out
@@ -624,6 +626,8 @@ build_raw_mlb_hitters <- function(players) {
         season_exit_velocity = sc_season$exit_velocity %||% season$exit_velocity
       )
     })
+
+  message(sprintf("  raw_hitters columns (%d): %s", ncol(out), paste(names(out), collapse = ", ")))
 
   add_percentiles(out, c(
     t14_xwoba = TRUE,
