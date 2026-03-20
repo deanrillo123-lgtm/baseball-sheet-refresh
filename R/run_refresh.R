@@ -411,7 +411,7 @@ resolve_player_ids <- function(df) {
   if (!is.null(name_col) && name_col != "player_name") {
     df <- df |> rename(player_name = !!sym(name_col))
   }
-  if (is.null(name_col)) stop("Cannot find player name column in test tab. Expected one of: player_name, player, name")
+  if (is.null(name_col)) stop("Cannot find player name column in roster tab. Expected one of: player_name, player, name. Found: ", paste(names(df), collapse = ", "))
 
   # Find ID and metadata columns, handling numeric suffixes from
   # duplicate sheet columns (e.g. mlbid_2 instead of mlbid)
@@ -1280,9 +1280,20 @@ main <- function() {
   all_tabs <- sheet_names(sheet_id)
   message(sprintf("  Available tabs: %s", paste(all_tabs, collapse = ", ")))
 
+  find_tab <- function(candidates) {
+    for (c in candidates) {
+      match <- all_tabs[tolower(all_tabs) == tolower(c)]
+      if (length(match) > 0) return(match[1])
+    }
+    candidates[1]
+  }
+
+  roster_tab_name <- find_tab(c("Test", "test", "Roster", "roster", "My Roster"))
+  message(sprintf("  Using roster tab: '%s'", roster_tab_name))
+
   message("Reading input tabs from Google Sheets...")
-  test_tab <- safe_read_sheet("test")
-  message(sprintf("  test: %d rows x %d cols", nrow(test_tab), ncol(test_tab)))
+  test_tab <- safe_read_sheet(roster_tab_name)
+  message(sprintf("  %s: %d rows x %d cols", roster_tab_name, nrow(test_tab), ncol(test_tab)))
   asset_tab <- safe_read_sheet("asset_database")
   message(sprintf("  asset_database: %d rows x %d cols", nrow(asset_tab), ncol(asset_tab)))
   fa_tab <- safe_read_sheet("Free Agent Helper")
