@@ -1277,6 +1277,9 @@ main <- function() {
   message(sprintf("Season year: %d | Refresh type: %s", season_year, refresh_type))
   message(sprintf("T14 window: %s to %s", t14_start, t14_end))
 
+  all_tabs <- sheet_names(sheet_id)
+  message(sprintf("  Available tabs: %s", paste(all_tabs, collapse = ", ")))
+
   message("Reading input tabs from Google Sheets...")
   test_tab <- safe_read_sheet("test")
   message(sprintf("  test: %d rows x %d cols", nrow(test_tab), ncol(test_tab)))
