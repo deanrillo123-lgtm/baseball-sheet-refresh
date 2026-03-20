@@ -491,8 +491,7 @@ agg_hitter_logs <- function(logs, start_date = NULL, end_date = NULL) {
     so = NA_real_, bb = NA_real_, sb = NA_real_, avg = NA_real_, obp = NA_real_,
     slg = NA_real_, ops = NA_real_, iso = NA_real_, woba = NA_real_,
     bb_pct = NA_real_, k_pct = NA_real_, wrc_plus = NA_real_,
-    hard_hit_pct = NA_real_, barrel_pct = NA_real_, exit_velocity = NA_real_,
-    age = NA_real_, team = NA_character_, level = NA_character_, position = NA_character_
+    hard_hit_pct = NA_real_, barrel_pct = NA_real_, exit_velocity = NA_real_
   )
   if (nrow(logs) == 0) return(empty_hitter)
   logs <- logs |>
@@ -537,8 +536,7 @@ agg_pitcher_logs <- function(logs, start_date = NULL, end_date = NULL) {
     k_pct = NA_real_, bb_pct = NA_real_, k_minus_bb_pct = NA_real_,
     swstr_pct = NA_real_, hard_hit_pct_against = NA_real_,
     barrel_pct_against = NA_real_, exit_velocity_against = NA_real_,
-    velo = NA_real_, saves_holds = NA_real_,
-    age = NA_real_, team = NA_character_, level = NA_character_
+    velo = NA_real_, saves_holds = NA_real_
   )
   if (nrow(logs) == 0) return(empty_pitcher)
   logs <- logs |>
