@@ -486,12 +486,20 @@ resolve_player_ids <- function(df) {
 }
 
 agg_hitter_logs <- function(logs, start_date = NULL, end_date = NULL) {
-  if (nrow(logs) == 0) return(tibble())
+  empty_hitter <- tibble(
+    games = NA_real_, pa = NA_real_, ab = NA_real_, h = NA_real_, hr = NA_real_,
+    so = NA_real_, bb = NA_real_, sb = NA_real_, avg = NA_real_, obp = NA_real_,
+    slg = NA_real_, ops = NA_real_, iso = NA_real_, woba = NA_real_,
+    bb_pct = NA_real_, k_pct = NA_real_, wrc_plus = NA_real_,
+    hard_hit_pct = NA_real_, barrel_pct = NA_real_, exit_velocity = NA_real_,
+    age = NA_real_, team = NA_character_, level = NA_character_, position = NA_character_
+  )
+  if (nrow(logs) == 0) return(empty_hitter)
   logs <- logs |>
     mutate(gamedate2 = as.Date(coalesce_col(pick(everything()), c("gamedate", "date"))))
   if (!is.null(start_date)) logs <- logs |> filter(gamedate2 >= as.Date(start_date))
   if (!is.null(end_date)) logs <- logs |> filter(gamedate2 <= as.Date(end_date))
-  if (nrow(logs) == 0) return(tibble())
+  if (nrow(logs) == 0) return(empty_hitter)
 
   tibble(
     games = sum_or_na(coalesce_col(logs, c("g"))),
@@ -522,12 +530,22 @@ agg_hitter_logs <- function(logs, start_date = NULL, end_date = NULL) {
 }
 
 agg_pitcher_logs <- function(logs, start_date = NULL, end_date = NULL) {
-  if (nrow(logs) == 0) return(tibble())
+  empty_pitcher <- tibble(
+    games = NA_real_, gs = NA_real_, ip = NA_real_, er = NA_real_,
+    so = NA_real_, bb = NA_real_, hr = NA_real_, era = NA_real_,
+    whip = NA_real_, fip = NA_real_, xfip = NA_real_, siera = NA_real_,
+    k_pct = NA_real_, bb_pct = NA_real_, k_minus_bb_pct = NA_real_,
+    swstr_pct = NA_real_, hard_hit_pct_against = NA_real_,
+    barrel_pct_against = NA_real_, exit_velocity_against = NA_real_,
+    velo = NA_real_, saves_holds = NA_real_,
+    age = NA_real_, team = NA_character_, level = NA_character_
+  )
+  if (nrow(logs) == 0) return(empty_pitcher)
   logs <- logs |>
     mutate(gamedate2 = as.Date(coalesce_col(pick(everything()), c("gamedate", "date"))))
   if (!is.null(start_date)) logs <- logs |> filter(gamedate2 >= as.Date(start_date))
   if (!is.null(end_date)) logs <- logs |> filter(gamedate2 <= as.Date(end_date))
-  if (nrow(logs) == 0) return(tibble())
+  if (nrow(logs) == 0) return(empty_pitcher)
 
   tibble(
     games = sum_or_na(coalesce_col(logs, c("g"))),
