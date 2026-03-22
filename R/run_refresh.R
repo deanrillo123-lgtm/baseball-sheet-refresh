@@ -435,14 +435,20 @@ resolve_player_ids <- function(df) {
   }
 
   # The Test tab has two Fangraphs ID columns: the first is an encoded/display
-  # value (e.g. *05udp*), the second (_2 suffix) is the real numeric ID.
-  # If the primary fangraphs_id looks non-numeric and a _2 variant exists, swap.
-  if ("fangraphs_id_2" %in% names(df)) {
+  # value (e.g. *05udp*), the second is the real numeric ID. After read_sheet +
+  # clean_names, duplicates get suffixed as _1/_2 or _N (from ...N notation).
+  # Find any alternate fangraphs_id column with more numeric values and use it.
+  fg_alt_cols <- grep("^fangraphs_id_\\d+$", names(df), value = TRUE)
+  message(sprintf("  fangraphs_id columns found: fangraphs_id, %s", paste(fg_alt_cols, collapse = ", ")))
+  if (length(fg_alt_cols) > 0) {
     primary_numeric <- suppressWarnings(sum(!is.na(as.numeric(df$fangraphs_id))))
-    alt_numeric <- suppressWarnings(sum(!is.na(as.numeric(df$fangraphs_id_2))))
-    if (alt_numeric > primary_numeric) {
-      message("  Swapping fangraphs_id with fangraphs_id_2 (primary was encoded)")
-      df$fangraphs_id <- df$fangraphs_id_2
+    for (alt_col in fg_alt_cols) {
+      alt_numeric <- suppressWarnings(sum(!is.na(as.numeric(df[[alt_col]]))))
+      if (alt_numeric > primary_numeric) {
+        message(sprintf("  Swapping fangraphs_id with %s (primary had %d numeric, alt has %d)", alt_col, primary_numeric, alt_numeric))
+        df$fangraphs_id <- df[[alt_col]]
+        break
+      }
     }
   }
 
