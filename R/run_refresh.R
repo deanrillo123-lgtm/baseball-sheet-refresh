@@ -1230,7 +1230,7 @@ compute_free_agents <- function(fa_df, raw_hitters, raw_pitchers) {
     }
   }
 
-  for (col_name in c("team", "position", "level")) {
+  for (col_name in c("team", "position", "level", "age")) {
     if (!col_name %in% names(fa_df)) {
       found <- find_col_by_prefix(fa_df, col_name)
       if (!is.null(found)) {
@@ -1285,11 +1285,11 @@ compute_free_agents <- function(fa_df, raw_hitters, raw_pitchers) {
   fa_df |>
     filter(level == "MLB" | is.na(level) | level == "") |>
     mutate(player_clean = norm_name(player), team_clean = norm_name(team)) |>
-    left_join(pool |> select(-player, -team, -age), by = c("player_clean", "team_clean")) |>
+    left_join(pool |> select(-player, -team), by = c("player_clean", "team_clean")) |>
     transmute(
       name = player,
       team = team,
-      age = age,
+      age = coalesce(age.x, age.y),
       position = coalesce(position.x, position.y),
       score = score
     ) |>
