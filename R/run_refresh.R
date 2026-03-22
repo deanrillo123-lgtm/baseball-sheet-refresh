@@ -965,15 +965,20 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
     }
   }
 
-  asset_pool_cols <- c("player", "team", "mlbid", "fangraphs_id",
-                       "core_1", "core_2", "core_3", "core_4", "core_5",
-                       "core_1_name", "core_2_name", "core_3_name", "core_4_name", "core_5_name",
-                       "current_score", "trend_score", "risk_score", "bucket")
+  empty_pool_tibble <- function() {
+    tibble(
+      player = character(), team = character(), mlbid = character(), fangraphs_id = character(),
+      core_1 = numeric(), core_2 = numeric(), core_3 = numeric(), core_4 = numeric(), core_5 = numeric(),
+      core_1_name = character(), core_2_name = character(), core_3_name = character(),
+      core_4_name = character(), core_5_name = character(),
+      current_score = numeric(), trend_score = numeric(), risk_score = numeric(), bucket = character()
+    )
+  }
 
   wh <- WEIGHTS$mlb_h_current
   wht <- WEIGHTS$mlb_h_trend
   if (nrow(raw_hitters) == 0) {
-    mlb_h <- tibble(!!!setNames(rep(list(character(0)), length(asset_pool_cols)), asset_pool_cols))
+    mlb_h <- empty_pool_tibble()
   } else {
   mlb_h <- raw_hitters |>
     transmute(
@@ -1025,7 +1030,7 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
   wp <- WEIGHTS$mlb_p_current
   wpt <- WEIGHTS$mlb_p_trend
   if (nrow(raw_pitchers) == 0) {
-    mlb_p <- tibble(!!!setNames(rep(list(character(0)), length(asset_pool_cols)), asset_pool_cols))
+    mlb_p <- empty_pool_tibble()
   } else {
   mlb_p <- raw_pitchers |>
     transmute(
@@ -1074,15 +1079,10 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
     )
   }
 
-  milb_cols <- c("player", "team", "mlbid", "fangraphs_id",
-                 "core_1", "core_2", "core_3", "core_4", "core_5",
-                 "core_1_name", "core_2_name", "core_3_name", "core_4_name", "core_5_name",
-                 "current_score", "trend_score", "risk_score", "bucket")
-
   wmh <- WEIGHTS$milb_h_current
   wmht <- WEIGHTS$milb_h_trend
   if (nrow(raw_milb_hitters) == 0) {
-    milb_h <- tibble(!!!setNames(rep(list(character(0)), length(milb_cols)), milb_cols))
+    milb_h <- empty_pool_tibble()
   } else {
   milb_h <- raw_milb_hitters |>
     transmute(
@@ -1134,7 +1134,7 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
   wmp <- WEIGHTS$milb_p_current
   wmpt <- WEIGHTS$milb_p_trend
   if (nrow(raw_milb_pitchers) == 0) {
-    milb_p <- tibble(!!!setNames(rep(list(character(0)), length(milb_cols)), milb_cols))
+    milb_p <- empty_pool_tibble()
   } else {
   milb_p <- raw_milb_pitchers |>
     transmute(
@@ -1267,11 +1267,13 @@ compute_free_agents <- function(fa_df, raw_hitters, raw_pitchers) {
     }
   }
 
-  fa_pool_cols <- c("player", "team", "age", "position", "score")
+  empty_fa_pool <- function() {
+    tibble(player = character(), team = character(), age = numeric(), position = character(), score = numeric())
+  }
 
   wh <- WEIGHTS$mlb_h_current
   if (nrow(raw_hitters) == 0) {
-    hit_pool <- tibble(!!!setNames(rep(list(character(0)), length(fa_pool_cols)), fa_pool_cols))
+    hit_pool <- empty_fa_pool()
   } else {
   hit_pool <- raw_hitters |>
     transmute(
@@ -1295,7 +1297,7 @@ compute_free_agents <- function(fa_df, raw_hitters, raw_pitchers) {
 
   wp <- WEIGHTS$mlb_p_current
   if (nrow(raw_pitchers) == 0) {
-    pitch_pool <- tibble(!!!setNames(rep(list(character(0)), length(fa_pool_cols)), fa_pool_cols))
+    pitch_pool <- empty_fa_pool()
   } else {
   pitch_pool <- raw_pitchers |>
     transmute(
