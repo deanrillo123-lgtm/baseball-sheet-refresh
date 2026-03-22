@@ -943,6 +943,18 @@ build_raw_milb_pitchers <- function(players) {
 }
 
 compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_hitters, raw_milb_pitchers) {
+  if (nrow(asset_df) == 0) {
+    message("  asset_df is empty, returning empty scores")
+    return(tibble(
+      player = character(), fantasy_team = character(), position = character(),
+      team = character(), role = character(), mlbid = character(), fangraphs_id = character(),
+      level = character(), asset_type = character(),
+      current_score = numeric(), trend_score = numeric(), risk_score = numeric(),
+      dynasty_war = numeric(), trade_value = numeric(), buy_low_flag = character(),
+      x3yr_dynasty_war = numeric()
+    ))
+  }
+
   asset_df <- asset_df |> clean_names()
 
   # Find player name column
@@ -1247,6 +1259,12 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
 }
 
 compute_free_agents <- function(fa_df, raw_hitters, raw_pitchers) {
+  if (nrow(fa_df) == 0) {
+    message("  fa_df is empty, returning empty free agents")
+    return(tibble(name = character(), team = character(), age = numeric(),
+                  position = character(), score = numeric()))
+  }
+
   fa_df <- fa_df |> clean_names()
 
   if (!"player" %in% names(fa_df)) {
