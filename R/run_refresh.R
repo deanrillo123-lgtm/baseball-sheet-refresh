@@ -459,7 +459,7 @@ resolve_player_ids <- function(df) {
 
   # Use MiLB FanGraphs ID when the main one is missing or zero,
   # and infer MiLB level from the presence of a milb_fg_id
-  milb_col <- grep("milb.*fg|fg.*milb", names(df), value = TRUE, ignore.case = TRUE)
+  milb_col <- grep("mi.?lb.*fg|milb.*fg|fg.*milb", names(df), value = TRUE, ignore.case = TRUE)
   message(sprintf("  MiLB FG ID columns found: %s", paste(milb_col, collapse = ", ")))
   if (length(milb_col) > 0 && milb_col[1] != "milb_fg_id") {
     df <- df |> rename(milb_fg_id = !!sym(milb_col[1]))
