@@ -313,9 +313,13 @@ agg_statcast_hitter <- function(sc) {
     ))
   }
 
+  # Log Statcast columns on first call to help diagnose missing fields
+  sc_cols_with_est <- names(sc)[grepl("estimated|xba|xwoba|woba", names(sc), ignore.case = TRUE)]
+  if (length(sc_cols_with_est) > 0) message(sprintf("    Statcast xBA/xwOBA columns: %s", paste(sc_cols_with_est, collapse = ", ")))
+
   launch_speed <- safe_num(coalesce_col(sc, c("launch_speed")))
-  est_woba <- safe_num(coalesce_col(sc, c("estimated_woba_using_speedangle", "woba_value")))
-  est_ba <- safe_num(coalesce_col(sc, c("estimated_ba_using_speedangle")))
+  est_woba <- safe_num(coalesce_col(sc, c("estimated_woba_using_speedangle", "est_woba", "xwoba", "woba_value")))
+  est_ba <- safe_num(coalesce_col(sc, c("estimated_ba_using_speedangle", "est_ba", "xba")))
 
   barrel_flag <- baseballr::code_barrel(
     launch_speed = launch_speed,
