@@ -615,6 +615,16 @@ build_raw_mlb_hitters <- function(players) {
       sc_end <- min(t14_end, as.Date(paste0(season_year, "-12-31")))
       sc_season <- safe_statcast_batter(p$mlbid[[1]], paste0(season_year, "-01-01"), sc_end) |> agg_statcast_hitter()
 
+      # Fallback: pull xwOBA/xBA from FanGraphs leaderboard if Statcast returned empty
+      fg_id <- safe_chr(p$fangraphs_id[[1]])
+      ldr_row <- bat_leaders[safe_chr(coalesce_col(bat_leaders, c("playerid"))) == fg_id, , drop = FALSE]
+      if (nrow(ldr_row) > 0) {
+        ldr_xwoba <- safe_num(coalesce_col(ldr_row[1,], c("xwoba", "x_woba", "xw_oba")))
+        ldr_xba <- safe_num(coalesce_col(ldr_row[1,], c("xba", "x_ba", "x_avg")))
+        if (!is.na(ldr_xwoba[1])) sc_season$xwoba <- sc_season$xwoba %||% ldr_xwoba[1]
+        if (!is.na(ldr_xba[1])) sc_season$xba <- sc_season$xba %||% ldr_xba[1]
+      }
+
       tibble(
         name = p$player_name[[1]],
         team = season$team %||% p$team[[1]],
