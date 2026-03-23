@@ -1366,7 +1366,7 @@ compute_free_agents <- function(fa_df, raw_hitters, raw_pitchers) {
     mutate(player_clean = norm_name(player), team_clean = norm_name(team))
 
   fa_df |>
-    mutate(age = safe_num(unlist(age))) |>
+    mutate(age = safe_num(sapply(age, function(x) if (is.null(x) || length(x) == 0) NA else x[[1]]))) |>
     filter(level == "MLB" | is.na(level) | level == "") |>
     mutate(player_clean = norm_name(player), team_clean = norm_name(team)) |>
     left_join(pool |> select(-player, -team), by = c("player_clean", "team_clean")) |>
