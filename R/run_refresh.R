@@ -456,6 +456,23 @@ resolve_player_ids <- function(df) {
     }
   }
 
+  # Use MiLB FanGraphs ID when the main one is missing or zero,
+  # and infer MiLB level from the presence of a milb_fg_id
+  if ("milb_fg_id" %in% names(df)) {
+    has_milb_id <- !is.na(df$milb_fg_id) & df$milb_fg_id != "" & df$milb_fg_id != "0"
+    missing_fg <- is.na(df$fangraphs_id) | df$fangraphs_id == "" | df$fangraphs_id == "0" | df$fangraphs_id == "NA"
+    df$fangraphs_id[missing_fg & has_milb_id] <- safe_chr(df$milb_fg_id[missing_fg & has_milb_id])
+    missing_level <- is.na(df$level) | df$level == ""
+    df$level[missing_level & has_milb_id] <- "MiLB"
+    message(sprintf("  MiLB FG IDs applied: %d players", sum(missing_fg & has_milb_id)))
+  }
+
+  # Use level_overide when set
+  if ("level_overide" %in% names(df)) {
+    has_override <- !is.na(df$level_overide) & df$level_overide != ""
+    df$level[has_override] <- df$level_overide[has_override]
+  }
+
   df <- df |>
   mutate(
     fangraphs_id = safe_chr(fangraphs_id),
