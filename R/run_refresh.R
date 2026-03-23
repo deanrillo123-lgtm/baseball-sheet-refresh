@@ -407,6 +407,7 @@ resolve_player_ids <- function(df) {
   df <- df |> clean_names()
   nm <- names(df)
 
+  message(sprintf("  Columns after clean_names: %s", paste(names(df), collapse = ", ")))
   # Find the player name column (handles name, player_name, player, plus
   # suffixed variants like name_1 that appear with duplicate sheet columns)
   name_col <- NULL
@@ -458,6 +459,11 @@ resolve_player_ids <- function(df) {
 
   # Use MiLB FanGraphs ID when the main one is missing or zero,
   # and infer MiLB level from the presence of a milb_fg_id
+  milb_col <- grep("milb.*fg|fg.*milb", names(df), value = TRUE, ignore.case = TRUE)
+  message(sprintf("  MiLB FG ID columns found: %s", paste(milb_col, collapse = ", ")))
+  if (length(milb_col) > 0 && milb_col[1] != "milb_fg_id") {
+    df <- df |> rename(milb_fg_id = !!sym(milb_col[1]))
+  }
   if ("milb_fg_id" %in% names(df)) {
     has_milb_id <- !is.na(df$milb_fg_id) & df$milb_fg_id != "" & df$milb_fg_id != "0"
     missing_fg <- is.na(df$fangraphs_id) | df$fangraphs_id == "" | df$fangraphs_id == "0" | df$fangraphs_id == "NA"
