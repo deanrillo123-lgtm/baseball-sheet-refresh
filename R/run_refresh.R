@@ -612,7 +612,8 @@ build_raw_mlb_hitters <- function(players) {
       season <- agg_hitter_logs(logs)
 
       sc14 <- safe_statcast_batter(p$mlbid[[1]], t14_start, t14_end) |> agg_statcast_hitter()
-      sc_season <- safe_statcast_batter(p$mlbid[[1]], paste0(season_year, "-01-01"), t14_end) |> agg_statcast_hitter()
+      sc_end <- min(t14_end, as.Date(paste0(season_year, "-12-31")))
+      sc_season <- safe_statcast_batter(p$mlbid[[1]], paste0(season_year, "-01-01"), sc_end) |> agg_statcast_hitter()
 
       tibble(
         name = p$player_name[[1]],
@@ -708,7 +709,8 @@ build_raw_mlb_pitchers <- function(players) {
       season <- agg_pitcher_logs(logs)
 
       sc14 <- safe_statcast_pitcher(p$mlbid[[1]], t14_start, t14_end) |> agg_statcast_pitcher()
-      sc_season <- safe_statcast_pitcher(p$mlbid[[1]], paste0(season_year, "-01-01"), t14_end) |> agg_statcast_pitcher()
+      sc_end_p <- min(t14_end, as.Date(paste0(season_year, "-12-31")))
+      sc_season <- safe_statcast_pitcher(p$mlbid[[1]], paste0(season_year, "-01-01"), sc_end_p) |> agg_statcast_pitcher()
 
       tibble(
         name = p$player_name[[1]],
@@ -1364,6 +1366,7 @@ compute_free_agents <- function(fa_df, raw_hitters, raw_pitchers) {
     mutate(player_clean = norm_name(player), team_clean = norm_name(team))
 
   fa_df |>
+    mutate(age = safe_num(unlist(age))) |>
     filter(level == "MLB" | is.na(level) | level == "") |>
     mutate(player_clean = norm_name(player), team_clean = norm_name(team)) |>
     left_join(pool |> select(-player, -team), by = c("player_clean", "team_clean")) |>
