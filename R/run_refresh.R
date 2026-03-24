@@ -675,6 +675,7 @@ build_raw_mlb_hitters <- function(players) {
         t14_bb_pct = t14$bb_pct,
         t14_k_pct = t14$k_pct,
         t14_bb_minus_k_pct = ifelse(is.na(t14$bb_pct) | is.na(t14$k_pct), NA_real_, t14$bb_pct - t14$k_pct),
+        t14_wrc_plus = t14$wrc_plus,
         t14_hard_hit_pct = sc14$hard_hit_pct %||% t14$hard_hit_pct,
         t14_barrel_pct = sc14$barrel_pct %||% t14$barrel_pct,
         t14_exit_velocity = sc14$exit_velocity %||% t14$exit_velocity,
@@ -695,6 +696,7 @@ build_raw_mlb_hitters <- function(players) {
         season_bb_pct = season$bb_pct,
         season_k_pct = season$k_pct,
         season_bb_minus_k_pct = ifelse(is.na(season$bb_pct) | is.na(season$k_pct), NA_real_, season$bb_pct - season$k_pct),
+        season_wrc_plus = season$wrc_plus,
         season_hard_hit_pct = sc_season$hard_hit_pct %||% season$hard_hit_pct,
         season_barrel_pct = sc_season$barrel_pct %||% season$barrel_pct,
         season_exit_velocity = sc_season$exit_velocity %||% season$exit_velocity
@@ -714,6 +716,7 @@ build_raw_mlb_hitters <- function(players) {
     t14_iso = TRUE,
     t14_xba = TRUE,
     t14_exit_velocity = TRUE,
+    t14_wrc_plus = TRUE,
     season_xwoba = TRUE,
     season_barrel_pct = TRUE,
     season_hard_hit_pct = TRUE,
@@ -723,7 +726,8 @@ build_raw_mlb_hitters <- function(players) {
     season_ops = TRUE,
     season_iso = TRUE,
     season_xba = TRUE,
-    season_exit_velocity = TRUE
+    season_exit_velocity = TRUE,
+    season_wrc_plus = TRUE
   ))
 }
 
