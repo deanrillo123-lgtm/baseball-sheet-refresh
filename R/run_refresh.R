@@ -564,7 +564,7 @@ agg_hitter_logs <- function(logs, start_date = NULL, end_date = NULL) {
     woba = mean_or_na(coalesce_col(logs, c("w_oba", "woba"))),
     bb_pct = mean_or_na(coalesce_col(logs, c("bb_percent", "bb_pct", "bb%"))),
     k_pct = mean_or_na(coalesce_col(logs, c("k_percent", "k_pct", "k%"))),
-    wrc_plus = mean_or_na(coalesce_col(logs, c("w_rc", "wrc_plus", "wrc+", "wrc"))),
+    wrc_plus = mean_or_na(coalesce_col(logs, c("wrc_plus", "wrc_2", "w_rc_2"))),
     hard_hit_pct = mean_or_na(coalesce_col(logs, c("hard_hit_percent", "hard_percent", "hardhit%", "hard%"))),
     barrel_pct = mean_or_na(coalesce_col(logs, c("barrel_percent", "barrel%", "barrels_per_bbe"))),
     exit_velocity = mean_or_na(coalesce_col(logs, c("ev", "max_ev", "maxev"))),
@@ -646,6 +646,8 @@ build_raw_mlb_hitters <- function(players) {
         ldr_xba <- safe_num(coalesce_col(ldr_row[1,], c("xba", "x_ba", "x_avg")))
         if (!is.na(ldr_xwoba[1])) sc_season$xwoba <- sc_season$xwoba %||% ldr_xwoba[1]
         if (!is.na(ldr_xba[1])) sc_season$xba <- sc_season$xba %||% ldr_xba[1]
+        ldr_wrc <- safe_num(coalesce_col(ldr_row[1,], c("wrc_2", "wrc_plus", "w_rc_2")))
+        if (!is.na(ldr_wrc[1]) && ldr_wrc[1] > 10) season$wrc_plus <- season$wrc_plus %||% ldr_wrc[1]
       }
 
       tibble(
