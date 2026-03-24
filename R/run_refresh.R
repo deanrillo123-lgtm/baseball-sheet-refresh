@@ -1007,7 +1007,12 @@ build_raw_milb_pitchers <- function(players) {
 
 compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_hitters, raw_milb_pitchers) {
   if (nrow(asset_df) == 0) {
-    message("  asset_df is empty, returning empty scores")
+    message("  asset_df is empty, writing column headers and returning empty scores")
+    header_df <- tibble(
+      Player = character(), Team = character(), Level = character(),
+      Role = character(), MLBID = character(), `Fangraphs ID` = character()
+    )
+    tryCatch(safe_write_sheet(header_df, "asset_database"), error = function(e) message(sprintf("  Could not write asset_database headers: %s", conditionMessage(e))))
     return(tibble(
       player = character(), fantasy_team = character(), position = character(),
       team = character(), role = character(), mlbid = character(), fangraphs_id = character(),
