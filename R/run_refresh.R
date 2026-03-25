@@ -397,23 +397,11 @@ safe_fg_pitch_leaders <- function(yr) {
   )
 }
 
-log_leaderboard_cols <- TRUE  # temporary debug flag
 message(sprintf("Fetching FanGraphs leaderboards for %d...", season_year))
 bat_leaders <- safe_fg_bat_leaders(season_year)
 message(sprintf("  Batter leaders: %d rows", nrow(bat_leaders)))
 pitch_leaders <- safe_fg_pitch_leaders(season_year)
 message(sprintf("  Pitcher leaders: %d rows", nrow(pitch_leaders)))
-if (log_leaderboard_cols && nrow(pitch_leaders) > 0) {
-  message(sprintf("  Pitcher leader columns: %s", paste(names(pitch_leaders), collapse = ", ")))
-  # Show Skenes row for debugging
-  skenes <- pitch_leaders[grepl("skenes", coalesce_col(pitch_leaders, c("name", "player_name")), ignore.case = TRUE), ]
-  if (nrow(skenes) > 0) {
-    for (cn in names(skenes)) {
-      v <- skenes[[cn]][1]
-      if (!is.na(v) && v != "") message(sprintf("    Skenes %s = %s", cn, v))
-    }
-  }
-}
 
 resolve_player_ids <- function(df) {
   df <- df |> clean_names()
@@ -770,13 +758,13 @@ build_raw_mlb_pitchers <- function(players) {
       ldr_xfip_minus <- NA_real_; ldr_fip_minus <- NA_real_
       ldr_velo <- NA_real_; ldr_xfip <- NA_real_
       if (nrow(ldr_p) > 0) {
-        ldr_stuff <- safe_num(coalesce_col(ldr_p[1,], c("stuff_plus", "stf", "stuff")))[1]
-        ldr_loc <- safe_num(coalesce_col(ldr_p[1,], c("location_plus", "loc", "location")))[1]
-        ldr_pitching <- safe_num(coalesce_col(ldr_p[1,], c("pitching_plus", "pit", "pitching")))[1]
-        ldr_xfip_minus <- safe_num(coalesce_col(ldr_p[1,], c("x_fip", "xfip_2", "xfip_minus")))[1]
+        ldr_stuff <- safe_num(coalesce_col(ldr_p[1,], c("sp_stuff", "stuff_plus")))[1]
+        ldr_loc <- safe_num(coalesce_col(ldr_p[1,], c("sp_location", "location_plus")))[1]
+        ldr_pitching <- safe_num(coalesce_col(ldr_p[1,], c("sp_pitching", "pitching_plus")))[1]
+        ldr_xfip_minus <- safe_num(coalesce_col(ldr_p[1,], c("x_fip_2", "xfip_minus")))[1]
         ldr_fip_minus <- safe_num(coalesce_col(ldr_p[1,], c("fip_2", "fip_minus")))[1]
-        ldr_velo <- safe_num(coalesce_col(ldr_p[1,], c("fbv", "velo", "v_fa", "fb")))[1]
-        ldr_xfip <- safe_num(coalesce_col(ldr_p[1,], c("xfip", "x_fip_3")))[1]
+        ldr_velo <- safe_num(coalesce_col(ldr_p[1,], c("f_bv", "fbv", "velo")))[1]
+        ldr_xfip <- safe_num(coalesce_col(ldr_p[1,], c("x_fip", "xfip")))[1]
       }
 
       tibble(
