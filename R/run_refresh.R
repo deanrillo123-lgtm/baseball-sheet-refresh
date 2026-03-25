@@ -397,11 +397,23 @@ safe_fg_pitch_leaders <- function(yr) {
   )
 }
 
+log_leaderboard_cols <- TRUE  # temporary debug flag
 message(sprintf("Fetching FanGraphs leaderboards for %d...", season_year))
 bat_leaders <- safe_fg_bat_leaders(season_year)
 message(sprintf("  Batter leaders: %d rows", nrow(bat_leaders)))
 pitch_leaders <- safe_fg_pitch_leaders(season_year)
 message(sprintf("  Pitcher leaders: %d rows", nrow(pitch_leaders)))
+if (log_leaderboard_cols && nrow(pitch_leaders) > 0) {
+  message(sprintf("  Pitcher leader columns: %s", paste(names(pitch_leaders), collapse = ", ")))
+  # Show Skenes row for debugging
+  skenes <- pitch_leaders[grepl("skenes", coalesce_col(pitch_leaders, c("name", "player_name")), ignore.case = TRUE), ]
+  if (nrow(skenes) > 0) {
+    for (cn in names(skenes)) {
+      v <- skenes[[cn]][1]
+      if (!is.na(v) && v != "") message(sprintf("    Skenes %s = %s", cn, v))
+    }
+  }
+}
 
 resolve_player_ids <- function(df) {
   df <- df |> clean_names()
