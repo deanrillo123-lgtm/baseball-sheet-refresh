@@ -1485,11 +1485,13 @@ compute_free_agents <- function(fa_df) {
 
   message(sprintf("  FA matched: %d hitters, %d pitchers", nrow(fa_bat), nrow(fa_pitch)))
 
+  # Helper: replace NA percentiles with neutral 50th percentile
+  na50 <- function(x) ifelse(is.na(x), 50, x)
+
   # --- FA HITTERS (Top 10) ---
   fa_hitters_out <- empty_list$fa_hitters
   if (nrow(fa_bat) > 0) {
     wh <- WEIGHTS$mlb_h_current
-    na50 <- function(x) ifelse(is.na(x), 50, x)
     scored <- fa_bat |>
       mutate(
         xwoba_p = na50(percentile_rank(xwoba, TRUE)), barrel_pct_p = na50(percentile_rank(barrel_pct, TRUE)),
@@ -1530,11 +1532,11 @@ compute_free_agents <- function(fa_df) {
     wp <- WEIGHTS$mlb_p_current
     scored_sp <- fa_sp_pool |>
       mutate(
-        k_minus_bb_p = percentile_rank(k_minus_bb_pct, TRUE), siera_p = percentile_rank(siera, FALSE),
-        xfip_p = percentile_rank(xfip, FALSE), swstr_p = percentile_rank(swstr_pct, TRUE),
-        velo_p = percentile_rank(velocity, TRUE), era_p = percentile_rank(era, FALSE),
-        whip_p = percentile_rank(whip, FALSE), sh_p = percentile_rank(saves_holds, TRUE),
-        hh_p = percentile_rank(hard_hit_pct, FALSE), hra_p = percentile_rank(hr_against, FALSE),
+        k_minus_bb_p = na50(percentile_rank(k_minus_bb_pct, TRUE)), siera_p = na50(percentile_rank(siera, FALSE)),
+        xfip_p = na50(percentile_rank(xfip, FALSE)), swstr_p = na50(percentile_rank(swstr_pct, TRUE)),
+        velo_p = na50(percentile_rank(velocity, TRUE)), era_p = na50(percentile_rank(era, FALSE)),
+        whip_p = na50(percentile_rank(whip, FALSE)), sh_p = na50(percentile_rank(saves_holds, TRUE)),
+        hh_p = na50(percentile_rank(hard_hit_pct, FALSE)), hra_p = na50(percentile_rank(hr_against, FALSE)),
         score = round(
           wp[["k_minus_bb_pct"]] * k_minus_bb_p + wp[["siera"]] * siera_p +
           wp[["xfip"]] * xfip_p + wp[["swstr_pct"]] * swstr_p + wp[["velocity"]] * velo_p +
@@ -1557,11 +1559,11 @@ compute_free_agents <- function(fa_df) {
     wp <- WEIGHTS$mlb_p_current
     scored_rp <- fa_rp_pool |>
       mutate(
-        k_minus_bb_p = percentile_rank(k_minus_bb_pct, TRUE), siera_p = percentile_rank(siera, FALSE),
-        xfip_p = percentile_rank(xfip, FALSE), swstr_p = percentile_rank(swstr_pct, TRUE),
-        velo_p = percentile_rank(velocity, TRUE), era_p = percentile_rank(era, FALSE),
-        whip_p = percentile_rank(whip, FALSE), sh_p = percentile_rank(saves_holds, TRUE),
-        hh_p = percentile_rank(hard_hit_pct, FALSE), hra_p = percentile_rank(hr_against, FALSE),
+        k_minus_bb_p = na50(percentile_rank(k_minus_bb_pct, TRUE)), siera_p = na50(percentile_rank(siera, FALSE)),
+        xfip_p = na50(percentile_rank(xfip, FALSE)), swstr_p = na50(percentile_rank(swstr_pct, TRUE)),
+        velo_p = na50(percentile_rank(velocity, TRUE)), era_p = na50(percentile_rank(era, FALSE)),
+        whip_p = na50(percentile_rank(whip, FALSE)), sh_p = na50(percentile_rank(saves_holds, TRUE)),
+        hh_p = na50(percentile_rank(hard_hit_pct, FALSE)), hra_p = na50(percentile_rank(hr_against, FALSE)),
         score = round(
           wp[["k_minus_bb_pct"]] * k_minus_bb_p + wp[["siera"]] * siera_p +
           wp[["xfip"]] * xfip_p + wp[["swstr_pct"]] * swstr_p + wp[["velocity"]] * velo_p +
