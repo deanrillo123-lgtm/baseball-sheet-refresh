@@ -1489,13 +1489,14 @@ compute_free_agents <- function(fa_df) {
   fa_hitters_out <- empty_list$fa_hitters
   if (nrow(fa_bat) > 0) {
     wh <- WEIGHTS$mlb_h_current
+    na50 <- function(x) ifelse(is.na(x), 50, x)
     scored <- fa_bat |>
       mutate(
-        xwoba_p = percentile_rank(xwoba, TRUE), barrel_pct_p = percentile_rank(barrel_pct, TRUE),
-        hard_hit_pct_p = percentile_rank(hard_hit_pct, TRUE), bb_minus_k_pct_p = percentile_rank(bb_minus_k_pct, TRUE),
-        sb_p = percentile_rank(sb, TRUE), hr_p = percentile_rank(hr, TRUE),
-        ops_p = percentile_rank(ops, TRUE), iso_p = percentile_rank(iso, TRUE),
-        xba_p = percentile_rank(xba, TRUE), ev_p = percentile_rank(exit_velocity, TRUE),
+        xwoba_p = na50(percentile_rank(xwoba, TRUE)), barrel_pct_p = na50(percentile_rank(barrel_pct, TRUE)),
+        hard_hit_pct_p = na50(percentile_rank(hard_hit_pct, TRUE)), bb_minus_k_pct_p = na50(percentile_rank(bb_minus_k_pct, TRUE)),
+        sb_p = na50(percentile_rank(sb, TRUE)), hr_p = na50(percentile_rank(hr, TRUE)),
+        ops_p = na50(percentile_rank(ops, TRUE)), iso_p = na50(percentile_rank(iso, TRUE)),
+        xba_p = na50(percentile_rank(xba, TRUE)), ev_p = na50(percentile_rank(exit_velocity, TRUE)),
         score = round(
           wh[["xwoba"]] * xwoba_p + wh[["barrel_pct"]] * barrel_pct_p +
           wh[["hard_hit_pct"]] * hard_hit_pct_p + wh[["bb_minus_k_pct"]] * bb_minus_k_pct_p +
@@ -1508,9 +1509,9 @@ compute_free_agents <- function(fa_df) {
       transmute(Name = player, Team = team, Age = age, Position = position,
                 PA = round(pa), HR = round(hr), SB = round(sb),
                 AVG = round(avg, 3), OBP = round(obp, 3), OPS = round(ops, 3),
-                xwOBA = round(xwoba, 3), `Barrel%` = round(barrel_pct, 1),
-                `HardHit%` = round(hard_hit_pct, 1),
-                `BB-K%` = round(bb_minus_k_pct, 1), Score = score)
+                xwOBA = round(xwoba, 3), `Barrel%` = round(barrel_pct * 100, 1),
+                `HardHit%` = round(hard_hit_pct * 100, 1),
+                `BB-K%` = round(bb_minus_k_pct * 100, 1), Score = score)
   }
 
   # --- SP vs RP split ---
@@ -1544,10 +1545,10 @@ compute_free_agents <- function(fa_df) {
       slice_head(n = 10)
     fa_sp_out <- scored_sp |>
       transmute(Name = player, Team = team, Age = age, IP = round(ip, 1), GS = round(gs),
-                ERA = round(era, 2), WHIP = round(whip, 2), `K%` = round(k_pct, 1),
-                `BB%` = round(bb_pct, 1), FIP = round(fip, 2), xFIP = round(xfip, 2),
+                ERA = round(era, 2), WHIP = round(whip, 2), `K%` = round(k_pct * 100, 1),
+                `BB%` = round(bb_pct * 100, 1), FIP = round(fip, 2), xFIP = round(xfip, 2),
                 SIERA = round(siera, 2), Velocity = round(velocity, 1),
-                `SwStr%` = round(swstr_pct, 1), Score = score)
+                `SwStr%` = round(swstr_pct * 100, 1), Score = score)
   }
 
   # --- FA RELIEF PITCHERS (Top 10) ---
@@ -1571,10 +1572,10 @@ compute_free_agents <- function(fa_df) {
       slice_head(n = 10)
     fa_rp_out <- scored_rp |>
       transmute(Name = player, Team = team, Age = age, IP = round(ip, 1),
-                ERA = round(era, 2), WHIP = round(whip, 2), `K%` = round(k_pct, 1),
-                `BB%` = round(bb_pct, 1), FIP = round(fip, 2), xFIP = round(xfip, 2),
+                ERA = round(era, 2), WHIP = round(whip, 2), `K%` = round(k_pct * 100, 1),
+                `BB%` = round(bb_pct * 100, 1), FIP = round(fip, 2), xFIP = round(xfip, 2),
                 `SV+HLD` = round(saves_holds), Velocity = round(velocity, 1),
-                `SwStr%` = round(swstr_pct, 1), Score = score)
+                `SwStr%` = round(swstr_pct * 100, 1), Score = score)
   }
 
   # --- FA PROSPECTS (Top 10) ---
