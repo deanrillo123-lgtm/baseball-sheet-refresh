@@ -751,6 +751,22 @@ build_raw_mlb_pitchers <- function(players) {
       sc_end_p <- min(t14_end, as.Date(paste0(season_year, "-12-31")))
       sc_season <- safe_statcast_pitcher(p$mlbid[[1]], paste0(season_year, "-01-01"), sc_end_p) |> agg_statcast_pitcher()
 
+      # Pull leaderboard stats not available in game logs
+      fg_id_p <- safe_chr(p$fangraphs_id[[1]])
+      ldr_p <- pitch_leaders[safe_chr(coalesce_col(pitch_leaders, c("playerid"))) == fg_id_p, , drop = FALSE]
+      ldr_stuff <- NA_real_; ldr_loc <- NA_real_; ldr_pitching <- NA_real_
+      ldr_xfip_minus <- NA_real_; ldr_fip_minus <- NA_real_
+      ldr_velo <- NA_real_; ldr_xfip <- NA_real_
+      if (nrow(ldr_p) > 0) {
+        ldr_stuff <- safe_num(coalesce_col(ldr_p[1,], c("stuff_plus", "stf", "stuff")))[1]
+        ldr_loc <- safe_num(coalesce_col(ldr_p[1,], c("location_plus", "loc", "location")))[1]
+        ldr_pitching <- safe_num(coalesce_col(ldr_p[1,], c("pitching_plus", "pit", "pitching")))[1]
+        ldr_xfip_minus <- safe_num(coalesce_col(ldr_p[1,], c("x_fip", "xfip_2", "xfip_minus")))[1]
+        ldr_fip_minus <- safe_num(coalesce_col(ldr_p[1,], c("fip_2", "fip_minus")))[1]
+        ldr_velo <- safe_num(coalesce_col(ldr_p[1,], c("fbv", "velo", "v_fa", "fb")))[1]
+        ldr_xfip <- safe_num(coalesce_col(ldr_p[1,], c("xfip", "x_fip_3")))[1]
+      }
+
       tibble(
         name = p$player_name[[1]],
         team = season$team %||% p$team[[1]],
@@ -773,8 +789,8 @@ build_raw_mlb_pitchers <- function(players) {
         t14_k_pct = t14$k_pct,
         t14_bb_pct = t14$bb_pct,
         t14_k_minus_bb_pct = ifelse(is.na(t14$k_pct) | is.na(t14$bb_pct), NA_real_, t14$k_pct - t14$bb_pct),
-        t14_velocity = sc14$velo %||% t14$velo,
-        t14_stuff_plus = NA_real_,
+        t14_velocity = sc14$velo %||% t14$velo %||% ldr_velo,
+        t14_stuff_plus = ldr_stuff,
         t14_saves_holds = t14$saves_holds,
         t14_swstr_pct = t14$swstr_pct,
         t14_hard_hit_pct_against = sc14$hard_hit_pct_against %||% t14$hard_hit_pct_against,
@@ -786,13 +802,17 @@ build_raw_mlb_pitchers <- function(players) {
         season_xera = sc_season$xera,
         season_whip = season$whip,
         season_fip = season$fip,
-        season_xfip = season$xfip,
+        season_xfip = season$xfip %||% ldr_xfip,
         season_siera = season$siera,
         season_k_pct = season$k_pct,
         season_bb_pct = season$bb_pct,
         season_k_minus_bb_pct = ifelse(is.na(season$k_pct) | is.na(season$bb_pct), NA_real_, season$k_pct - season$bb_pct),
-        season_velocity = sc_season$velo %||% season$velo,
-        season_stuff_plus = NA_real_,
+        season_velocity = sc_season$velo %||% season$velo %||% ldr_velo,
+        season_stuff_plus = ldr_stuff,
+        season_location_plus = ldr_loc,
+        season_pitching_plus = ldr_pitching,
+        season_xfip_minus = ldr_xfip_minus,
+        season_fip_minus = ldr_fip_minus,
         season_saves_holds = season$saves_holds,
         season_swstr_pct = season$swstr_pct,
         season_hard_hit_pct_against = sc_season$hard_hit_pct_against %||% season$hard_hit_pct_against,
@@ -820,7 +840,12 @@ build_raw_mlb_pitchers <- function(players) {
     season_whip = FALSE,
     season_saves_holds = TRUE,
     season_hard_hit_pct_against = FALSE,
-    season_hr_against = FALSE
+    season_hr_against = FALSE,
+    season_stuff_plus = TRUE,
+    season_location_plus = TRUE,
+    season_pitching_plus = TRUE,
+    season_xfip_minus = FALSE,
+    season_fip_minus = FALSE
   ))
 }
 
