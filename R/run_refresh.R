@@ -1353,101 +1353,255 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
   out
 }
 
-compute_free_agents <- function(fa_df, raw_hitters, raw_pitchers) {
+compute_free_agents <- function(fa_df) {
+  empty_list <- list(
+    fa_hitters = tibble(Name = character(), Team = character(), Age = numeric(), Position = character(),
+                        PA = numeric(), HR = numeric(), SB = numeric(), AVG = numeric(), OBP = numeric(),
+                        OPS = numeric(), xwOBA = numeric(), `Barrel%` = numeric(), `HardHit%` = numeric(),
+                        `BB-K%` = numeric(), Score = numeric()),
+    fa_sp = tibble(Name = character(), Team = character(), Age = numeric(), IP = numeric(), GS = numeric(),
+                   ERA = numeric(), WHIP = numeric(), `K%` = numeric(), `BB%` = numeric(), FIP = numeric(),
+                   xFIP = numeric(), SIERA = numeric(), Velocity = numeric(), `SwStr%` = numeric(), Score = numeric()),
+    fa_rp = tibble(Name = character(), Team = character(), Age = numeric(), IP = numeric(),
+                   ERA = numeric(), WHIP = numeric(), `K%` = numeric(), `BB%` = numeric(), FIP = numeric(),
+                   xFIP = numeric(), `SV+HLD` = numeric(), Velocity = numeric(), `SwStr%` = numeric(), Score = numeric()),
+    fa_prospects = tibble(Name = character(), Team = character(), Age = numeric(), Position = character(),
+                          DD_Rank = numeric(), BP_Rank = numeric(), Score = numeric())
+  )
+
   if (nrow(fa_df) == 0) {
-    message("  fa_df is empty, returning empty free agents")
-    return(tibble(name = character(), team = character(), age = numeric(),
-                  position = character(), score = numeric()))
+    message("  fa_df is empty, returning empty categories")
+    return(empty_list)
   }
 
   fa_df <- fa_df |> clean_names()
 
+  # Resolve column names
   if (!"player" %in% names(fa_df)) {
     for (cand in c("player_name", "name")) {
       found <- find_col_by_prefix(fa_df, cand)
       if (!is.null(found)) { fa_df <- fa_df |> rename(player = !!sym(found)); break }
     }
   }
-
-  for (col_name in c("team", "position", "level", "age")) {
+  for (col_name in c("team", "position", "age", "fangraphs_id", "mlbid", "ineligible", "dd", "bp")) {
     if (!col_name %in% names(fa_df)) {
       found <- find_col_by_prefix(fa_df, col_name)
       if (!is.null(found)) {
         fa_df <- fa_df |> rename(!!col_name := !!sym(found))
       } else {
-        fa_df[[col_name]] <- if (col_name == "level") "MLB" else NA
+        fa_df[[col_name]] <- NA
       }
     }
   }
 
-  empty_fa_pool <- function() {
-    tibble(player = character(), team = character(), age = numeric(), position = character(), score = numeric())
-  }
+  fa_df <- fa_df |>
+    mutate(
+      player_clean = norm_name(player),
+      team_clean = norm_name(team),
+      age = safe_num(sapply(age, function(x) if (is.null(x) || length(x) == 0) NA else x[[1]])),
+      position = ifelse(is.na(position) | position == "#REF!", "Unknown", safe_chr(position)),
+      fangraphs_id = safe_chr(fangraphs_id),
+      dd = safe_num(sapply(dd, function(x) if (is.null(x) || length(x) == 0) NA else x[[1]])),
+      bp = safe_num(sapply(bp, function(x) if (is.null(x) || length(x) == 0) NA else x[[1]]))
+    ) |>
+    filter(is.na(ineligible) | ineligible == "")
 
-  wh <- WEIGHTS$mlb_h_current
-  if (nrow(raw_hitters) == 0) {
-    hit_pool <- empty_fa_pool()
-  } else {
-  hit_pool <- raw_hitters |>
+  message(sprintf("  FA pool after filtering: %d players", nrow(fa_df)))
+
+  # Build batter reference from leaderboard
+  bat_ref <- bat_leaders |>
     transmute(
-      player = name, team, age, position = "H",
-      score = round(
-        wh[["xwoba"]] * season_xwoba_pctile +
-        wh[["barrel_pct"]] * season_barrel_pct_pctile +
-        wh[["hard_hit_pct"]] * season_hard_hit_pct_pctile +
-        wh[["bb_minus_k_pct"]] * season_bb_minus_k_pct_pctile +
-        wh[["sb"]] * season_sb_pctile +
-        wh[["hr"]] * season_hr_pctile +
-        wh[["ops"]] * season_ops_pctile +
-        wh[["iso"]] * season_iso_pctile +
-        wh[["xba"]] * season_xba_pctile +
-        wh[["exit_velocity"]] * season_exit_velocity_pctile,
-        1
-      )
+      fg_id = safe_chr(coalesce_col(pick(everything()), c("playerid"))),
+      name_ref = norm_name(coalesce_col(pick(everything()), c("name", "player_name"))),
+      team_ref = norm_name(coalesce_col(pick(everything()), c("team"))),
+      ref_age = safe_num(coalesce_col(pick(everything()), c("age"))),
+      pa = safe_num(coalesce_col(pick(everything()), c("pa"))),
+      hr = safe_num(coalesce_col(pick(everything()), c("hr"))),
+      sb = safe_num(coalesce_col(pick(everything()), c("sb"))),
+      avg = safe_num(coalesce_col(pick(everything()), c("avg"))),
+      obp = safe_num(coalesce_col(pick(everything()), c("obp"))),
+      ops = safe_num(coalesce_col(pick(everything()), c("ops"))),
+      iso = safe_num(coalesce_col(pick(everything()), c("iso"))),
+      woba = safe_num(coalesce_col(pick(everything()), c("woba"))),
+      xwoba = safe_num(coalesce_col(pick(everything()), c("xwoba", "x_woba"))),
+      xba = safe_num(coalesce_col(pick(everything()), c("xba", "x_ba"))),
+      bb_pct = safe_num(coalesce_col(pick(everything()), c("bb_percent", "bb_pct"))),
+      k_pct = safe_num(coalesce_col(pick(everything()), c("k_percent", "k_pct"))),
+      hard_hit_pct = safe_num(coalesce_col(pick(everything()), c("hard_hit_percent", "hard_hit_pct"))),
+      barrel_pct = safe_num(coalesce_col(pick(everything()), c("barrel_batted_rate", "barrel_pct"))),
+      exit_velocity = safe_num(coalesce_col(pick(everything()), c("ev", "exit_velocity")))
+    ) |>
+    mutate(bb_minus_k_pct = ifelse(!is.na(bb_pct) & !is.na(k_pct), bb_pct - k_pct, NA_real_))
+
+  # Build pitcher reference from leaderboard
+  pitch_ref <- pitch_leaders |>
+    transmute(
+      fg_id = safe_chr(coalesce_col(pick(everything()), c("playerid"))),
+      name_ref = norm_name(coalesce_col(pick(everything()), c("name", "player_name"))),
+      team_ref = norm_name(coalesce_col(pick(everything()), c("team"))),
+      ref_age = safe_num(coalesce_col(pick(everything()), c("age"))),
+      g = safe_num(coalesce_col(pick(everything()), c("g"))),
+      gs = safe_num(coalesce_col(pick(everything()), c("gs"))),
+      ip = safe_num(coalesce_col(pick(everything()), c("ip"))),
+      era = safe_num(coalesce_col(pick(everything()), c("era"))),
+      whip = safe_num(coalesce_col(pick(everything()), c("whip"))),
+      k_pct = safe_num(coalesce_col(pick(everything()), c("k_percent", "k_pct"))),
+      bb_pct = safe_num(coalesce_col(pick(everything()), c("bb_percent", "bb_pct"))),
+      fip = safe_num(coalesce_col(pick(everything()), c("fip"))),
+      xfip = safe_num(coalesce_col(pick(everything()), c("x_fip", "xfip"))),
+      siera = safe_num(coalesce_col(pick(everything()), c("siera"))),
+      velocity = safe_num(coalesce_col(pick(everything()), c("f_bv", "fbv"))),
+      sv = safe_num(coalesce_col(pick(everything()), c("sv"))),
+      hld = safe_num(coalesce_col(pick(everything()), c("hld"))),
+      swstr_pct = safe_num(coalesce_col(pick(everything()), c("sw_str_percent", "sw_str_pct"))),
+      hard_hit_pct = safe_num(coalesce_col(pick(everything()), c("hard_hit_percent", "hard_hit_pct"))),
+      hr_against = safe_num(coalesce_col(pick(everything()), c("hr")))
+    ) |>
+    mutate(
+      saves_holds = ifelse(is.na(sv), 0, sv) + ifelse(is.na(hld), 0, hld),
+      k_minus_bb_pct = ifelse(!is.na(k_pct) & !is.na(bb_pct), k_pct - bb_pct, NA_real_)
     )
 
+  # Join FA to batter leaderboard by FG ID, then name fallback
+  fa_bat <- fa_df |>
+    inner_join(bat_ref, by = c("fangraphs_id" = "fg_id")) |>
+    filter(!is.na(pa) & pa > 0)
+  # Name fallback for unmatched
+  unmatched_bat <- fa_df |>
+    filter(!player_clean %in% fa_bat$player_clean) |>
+    inner_join(bat_ref, by = c("player_clean" = "name_ref")) |>
+    filter(!is.na(pa) & pa > 0)
+  fa_bat <- bind_rows(fa_bat, unmatched_bat) |> distinct(player_clean, .keep_all = TRUE)
+
+  # Join FA to pitcher leaderboard
+  fa_pitch <- fa_df |>
+    inner_join(pitch_ref, by = c("fangraphs_id" = "fg_id")) |>
+    filter(!is.na(ip) & ip > 0)
+  unmatched_pitch <- fa_df |>
+    filter(!player_clean %in% fa_pitch$player_clean) |>
+    inner_join(pitch_ref, by = c("player_clean" = "name_ref")) |>
+    filter(!is.na(ip) & ip > 0)
+  fa_pitch <- bind_rows(fa_pitch, unmatched_pitch) |> distinct(player_clean, .keep_all = TRUE)
+
+  message(sprintf("  FA matched: %d hitters, %d pitchers", nrow(fa_bat), nrow(fa_pitch)))
+
+  # --- FA HITTERS (Top 10) ---
+  fa_hitters_out <- empty_list$fa_hitters
+  if (nrow(fa_bat) > 0) {
+    wh <- WEIGHTS$mlb_h_current
+    scored <- fa_bat |>
+      mutate(
+        xwoba_p = percentile_rank(xwoba, TRUE), barrel_pct_p = percentile_rank(barrel_pct, TRUE),
+        hard_hit_pct_p = percentile_rank(hard_hit_pct, TRUE), bb_minus_k_pct_p = percentile_rank(bb_minus_k_pct, TRUE),
+        sb_p = percentile_rank(sb, TRUE), hr_p = percentile_rank(hr, TRUE),
+        ops_p = percentile_rank(ops, TRUE), iso_p = percentile_rank(iso, TRUE),
+        xba_p = percentile_rank(xba, TRUE), ev_p = percentile_rank(exit_velocity, TRUE),
+        score = round(
+          wh[["xwoba"]] * xwoba_p + wh[["barrel_pct"]] * barrel_pct_p +
+          wh[["hard_hit_pct"]] * hard_hit_pct_p + wh[["bb_minus_k_pct"]] * bb_minus_k_pct_p +
+          wh[["sb"]] * sb_p + wh[["hr"]] * hr_p + wh[["ops"]] * ops_p +
+          wh[["iso"]] * iso_p + wh[["xba"]] * xba_p + wh[["exit_velocity"]] * ev_p, 1)
+      ) |>
+      arrange(desc(score)) |>
+      slice_head(n = 10)
+    fa_hitters_out <- scored |>
+      transmute(Name = player, Team = team, Age = age, Position = position,
+                PA = round(pa), HR = round(hr), SB = round(sb),
+                AVG = round(avg, 3), OBP = round(obp, 3), OPS = round(ops, 3),
+                xwOBA = round(xwoba, 3), `Barrel%` = round(barrel_pct, 1),
+                `HardHit%` = round(hard_hit_pct, 1),
+                `BB-K%` = round(bb_minus_k_pct, 1), Score = score)
   }
 
-  wp <- WEIGHTS$mlb_p_current
-  if (nrow(raw_pitchers) == 0) {
-    pitch_pool <- empty_fa_pool()
-  } else {
-  pitch_pool <- raw_pitchers |>
-    transmute(
-      player = name, team, age, position = "P",
-      score = round(
-        wp[["k_minus_bb_pct"]] * season_k_minus_bb_pct_pctile +
-        wp[["siera"]] * season_siera_pctile +
-        wp[["xfip"]] * season_xfip_pctile +
-        wp[["swstr_pct"]] * season_swstr_pct_pctile +
-        wp[["velocity"]] * season_velocity_pctile +
-        wp[["era"]] * season_era_pctile +
-        wp[["whip"]] * season_whip_pctile +
-        wp[["saves_holds"]] * season_saves_holds_pctile +
-        wp[["hard_hit_pct_against"]] * season_hard_hit_pct_against_pctile +
-        wp[["hr_against"]] * season_hr_against_pctile,
-        1
-      )
-    )
+  # --- SP vs RP split ---
+  fa_sp_pool <- fa_pitch |> filter(!is.na(gs) & gs > 0 & (gs / g) >= 0.5)
+  fa_rp_pool <- fa_pitch |> filter(is.na(gs) | gs == 0 | (gs / g) < 0.5)
+  # Also use position hint for borderline cases
+  rp_by_pos <- fa_pitch |> filter(grepl("RP", position, ignore.case = TRUE)) |> pull(player_clean)
+  fa_rp_pool <- bind_rows(fa_rp_pool, fa_sp_pool |> filter(player_clean %in% rp_by_pos)) |> distinct(player_clean, .keep_all = TRUE)
+  fa_sp_pool <- fa_sp_pool |> filter(!player_clean %in% rp_by_pos)
+
+  message(sprintf("  FA pitchers split: %d SP, %d RP", nrow(fa_sp_pool), nrow(fa_rp_pool)))
+
+  # --- FA STARTING PITCHERS (Top 10) ---
+  fa_sp_out <- empty_list$fa_sp
+  if (nrow(fa_sp_pool) > 0) {
+    wp <- WEIGHTS$mlb_p_current
+    scored_sp <- fa_sp_pool |>
+      mutate(
+        k_minus_bb_p = percentile_rank(k_minus_bb_pct, TRUE), siera_p = percentile_rank(siera, FALSE),
+        xfip_p = percentile_rank(xfip, FALSE), swstr_p = percentile_rank(swstr_pct, TRUE),
+        velo_p = percentile_rank(velocity, TRUE), era_p = percentile_rank(era, FALSE),
+        whip_p = percentile_rank(whip, FALSE), sh_p = percentile_rank(saves_holds, TRUE),
+        hh_p = percentile_rank(hard_hit_pct, FALSE), hra_p = percentile_rank(hr_against, FALSE),
+        score = round(
+          wp[["k_minus_bb_pct"]] * k_minus_bb_p + wp[["siera"]] * siera_p +
+          wp[["xfip"]] * xfip_p + wp[["swstr_pct"]] * swstr_p + wp[["velocity"]] * velo_p +
+          wp[["era"]] * era_p + wp[["whip"]] * whip_p + wp[["saves_holds"]] * sh_p +
+          wp[["hard_hit_pct_against"]] * hh_p + wp[["hr_against"]] * hra_p, 1)
+      ) |>
+      arrange(desc(score)) |>
+      slice_head(n = 10)
+    fa_sp_out <- scored_sp |>
+      transmute(Name = player, Team = team, Age = age, IP = round(ip, 1), GS = round(gs),
+                ERA = round(era, 2), WHIP = round(whip, 2), `K%` = round(k_pct, 1),
+                `BB%` = round(bb_pct, 1), FIP = round(fip, 2), xFIP = round(xfip, 2),
+                SIERA = round(siera, 2), Velocity = round(velocity, 1),
+                `SwStr%` = round(swstr_pct, 1), Score = score)
   }
 
-  pool <- bind_rows(hit_pool, pitch_pool) |>
-    mutate(player_clean = norm_name(player), team_clean = norm_name(team))
+  # --- FA RELIEF PITCHERS (Top 10) ---
+  fa_rp_out <- empty_list$fa_rp
+  if (nrow(fa_rp_pool) > 0) {
+    wp <- WEIGHTS$mlb_p_current
+    scored_rp <- fa_rp_pool |>
+      mutate(
+        k_minus_bb_p = percentile_rank(k_minus_bb_pct, TRUE), siera_p = percentile_rank(siera, FALSE),
+        xfip_p = percentile_rank(xfip, FALSE), swstr_p = percentile_rank(swstr_pct, TRUE),
+        velo_p = percentile_rank(velocity, TRUE), era_p = percentile_rank(era, FALSE),
+        whip_p = percentile_rank(whip, FALSE), sh_p = percentile_rank(saves_holds, TRUE),
+        hh_p = percentile_rank(hard_hit_pct, FALSE), hra_p = percentile_rank(hr_against, FALSE),
+        score = round(
+          wp[["k_minus_bb_pct"]] * k_minus_bb_p + wp[["siera"]] * siera_p +
+          wp[["xfip"]] * xfip_p + wp[["swstr_pct"]] * swstr_p + wp[["velocity"]] * velo_p +
+          wp[["era"]] * era_p + wp[["whip"]] * whip_p + wp[["saves_holds"]] * sh_p +
+          wp[["hard_hit_pct_against"]] * hh_p + wp[["hr_against"]] * hra_p, 1)
+      ) |>
+      arrange(desc(score)) |>
+      slice_head(n = 10)
+    fa_rp_out <- scored_rp |>
+      transmute(Name = player, Team = team, Age = age, IP = round(ip, 1),
+                ERA = round(era, 2), WHIP = round(whip, 2), `K%` = round(k_pct, 1),
+                `BB%` = round(bb_pct, 1), FIP = round(fip, 2), xFIP = round(xfip, 2),
+                `SV+HLD` = round(saves_holds), Velocity = round(velocity, 1),
+                `SwStr%` = round(swstr_pct, 1), Score = score)
+  }
 
-  fa_df |>
-    mutate(age = safe_num(sapply(age, function(x) if (is.null(x) || length(x) == 0) NA else x[[1]]))) |>
-    filter(level == "MLB" | is.na(level) | level == "") |>
-    mutate(player_clean = norm_name(player), team_clean = norm_name(team)) |>
-    left_join(pool |> select(-player, -team), by = c("player_clean", "team_clean")) |>
-    transmute(
-      name = player,
-      team = team,
-      age = coalesce(age.x, age.y),
-      position = coalesce(position.x, position.y),
-      score = score
+  # --- FA PROSPECTS (Top 10) ---
+  # Players not found in either MLB leaderboard with DD or BP rankings
+  matched_ids <- unique(c(fa_bat$player_clean, fa_pitch$player_clean))
+  fa_prospects <- fa_df |>
+    filter(!player_clean %in% matched_ids) |>
+    filter(!is.na(dd) | !is.na(bp)) |>
+    mutate(
+      dd_p = percentile_rank(dd, FALSE),  # lower rank = better
+      bp_p = percentile_rank(bp, FALSE),
+      score = round(ifelse(!is.na(dd_p) & !is.na(bp_p), 0.5 * dd_p + 0.5 * bp_p,
+                           coalesce(dd_p, bp_p)), 1)
     ) |>
     arrange(desc(score)) |>
-    slice_head(n = 20)
+    slice_head(n = 10)
+  fa_prospects_out <- empty_list$fa_prospects
+  if (nrow(fa_prospects) > 0) {
+    fa_prospects_out <- fa_prospects |>
+      transmute(Name = player, Team = team, Age = age, Position = position,
+                DD_Rank = dd, BP_Rank = bp, Score = score)
+  }
+
+  message(sprintf("  FA results: %d hitters, %d SP, %d RP, %d prospects",
+                  nrow(fa_hitters_out), nrow(fa_sp_out), nrow(fa_rp_out), nrow(fa_prospects_out)))
+
+  list(fa_hitters = fa_hitters_out, fa_sp = fa_sp_out, fa_rp = fa_rp_out, fa_prospects = fa_prospects_out)
 }
 
 main <- function() {
@@ -1493,8 +1647,8 @@ main <- function() {
 
   message("Computing asset scores and free agent rankings...")
   asset_scores <- compute_asset_scores(asset_tab, raw_hitters, raw_pitchers, raw_milb_hitters, raw_milb_pitchers)
-  free_agents <- compute_free_agents(fa_tab, raw_hitters, raw_pitchers)
-  message(sprintf("  Asset scores: %d rows | Free agents: %d rows", nrow(asset_scores), nrow(free_agents)))
+  fa_results <- compute_free_agents(fa_tab)
+  message(sprintf("  Asset scores: %d rows", nrow(asset_scores)))
 
   message("Writing output tabs to Google Sheets...")
   safe_write_sheet(raw_hitters, "raw_hitters")
@@ -1507,8 +1661,14 @@ main <- function() {
   message(sprintf("  raw_milb_pitchers: %d rows", nrow(raw_milb_pitchers)))
   safe_write_sheet(asset_scores, "asset_scores")
   message(sprintf("  asset_scores: %d rows", nrow(asset_scores)))
-  safe_write_sheet(free_agents, "free_agent_rankings")
-  message(sprintf("  free_agent_rankings: %d rows", nrow(free_agents)))
+  safe_write_sheet(fa_results$fa_hitters, "fa_hitters")
+  message(sprintf("  fa_hitters: %d rows", nrow(fa_results$fa_hitters)))
+  safe_write_sheet(fa_results$fa_sp, "fa_sp")
+  message(sprintf("  fa_sp: %d rows", nrow(fa_results$fa_sp)))
+  safe_write_sheet(fa_results$fa_rp, "fa_rp")
+  message(sprintf("  fa_rp: %d rows", nrow(fa_results$fa_rp)))
+  safe_write_sheet(fa_results$fa_prospects, "fa_prospects")
+  message(sprintf("  fa_prospects: %d rows", nrow(fa_results$fa_prospects)))
 
   finished_at <- with_tz(now("America/Chicago"), "America/Chicago")
   duration <- round(as.numeric(difftime(finished_at, started_at, units = "mins")), 2)
@@ -1524,7 +1684,10 @@ main <- function() {
     raw_milb_hitters_rows = nrow(raw_milb_hitters),
     raw_milb_pitchers_rows = nrow(raw_milb_pitchers),
     asset_scores_rows = nrow(asset_scores),
-    free_agent_rows = nrow(free_agents),
+    fa_hitters_rows = nrow(fa_results$fa_hitters),
+    fa_sp_rows = nrow(fa_results$fa_sp),
+    fa_rp_rows = nrow(fa_results$fa_rp),
+    fa_prospects_rows = nrow(fa_results$fa_prospects),
     notes = "Percentiles added to raw tabs and asset scores. Unsupported source fields remain NA."
   )
   safe_write_sheet(last_update, "last_update")
