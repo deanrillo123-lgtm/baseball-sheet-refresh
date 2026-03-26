@@ -13,7 +13,11 @@ suppressPackageStartupMessages({
   library(tibble)
   library(glue)
   library(jsonlite)
+  library(httr)
 })
+
+# Set a browser-like User-Agent so FanGraphs doesn't reject requests from GH Actions
+set_config(user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"))
 
 `%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || all(is.na(x))) y else x
 
@@ -397,10 +401,213 @@ safe_fg_pitch_leaders <- function(yr) {
   )
 }
 
+# Leaderboard cache: save on success, load on failure (FanGraphs 403s from GH Actions)
+cache_dir <- file.path(getwd(), "cache")
+if (!dir.exists(cache_dir)) dir.create(cache_dir, recursive = TRUE)
+
+save_leader_cache <- function(df, label, yr) {
+  if (nrow(df) > 0) {
+    path <- file.path(cache_dir, sprintf("%s_%d.csv", label, yr))
+    write_csv(df, path)
+    message(sprintf("  Cached %s: %d rows -> %s", label, nrow(df), basename(path)))
+  }
+}
+
+load_leader_cache <- function(label, yr) {
+  path <- file.path(cache_dir, sprintf("%s_%d.csv", label, yr))
+  if (file.exists(path)) {
+    cached <- read_csv(path, show_col_types = FALSE) |> clean_names()
+    message(sprintf("  Loaded %s from cache: %d rows (file: %s)", label, nrow(cached), basename(path)))
+    return(cached)
+  }
+  message(sprintf("  No cache found for %s_%d", label, yr))
+  tibble()
+}
+
+fetch_with_retry <- function(fetch_fn, label, yr, max_retries = 2) {
+  for (attempt in seq_len(max_retries + 1)) {
+    result <- fetch_fn(yr)
+    if (nrow(result) > 0) return(result)
+    if (attempt <= max_retries) {
+      wait <- attempt * 3
+      message(sprintf("  %s returned 0 rows, retrying in %ds (attempt %d/%d)...",
+                       label, wait, attempt, max_retries + 1))
+      Sys.sleep(wait)
+    }
+  }
+  result
+}
+
+# Alternative leaderboard source: MLB Stats API + Baseball Savant
+# Used when FanGraphs is blocked (Cloudflare 403) and no file cache exists
+fetch_alt_bat_leaders <- function(yr) {
+  message("  Trying alternative source: MLB Stats API + Baseball Savant...")
+  tryCatch({
+    mlb_url <- sprintf("https://statsapi.mlb.com/api/v1/stats?stats=season&group=hitting&season=%d&sportId=1&limit=5000&sortStat=plateAppearances&order=desc", yr)
+    mlb_resp <- GET(mlb_url)
+    if (status_code(mlb_resp) != 200) { message("    MLB Stats API failed"); return(tibble()) }
+    mlb_data <- content(mlb_resp, as = "parsed")
+    splits <- mlb_data$stats[[1]]$splits
+    if (length(splits) == 0) { message("    MLB Stats API returned 0 splits"); return(tibble()) }
+
+    mlb_df <- map_dfr(splits, function(s) {
+      st <- s$stat
+      tibble(
+        playerid = as.character(s$player$id),
+        name = s$player$fullName,
+        team = ifelse(!is.null(s$team$abbreviation), s$team$abbreviation, ""),
+        age = st$age %||% NA_real_,
+        pa = st$plateAppearances %||% 0,
+        hr = st$homeRuns %||% 0,
+        sb = st$stolenBases %||% 0,
+        avg = as.numeric(st$avg %||% 0),
+        obp = as.numeric(st$obp %||% 0),
+        slg = as.numeric(st$slg %||% 0),
+        ops = as.numeric(st$ops %||% 0),
+        bb = st$baseOnBalls %||% 0,
+        so = st$strikeOuts %||% 0
+      )
+    }) |> mutate(
+      iso = slg - avg,
+      bb_percent = ifelse(pa > 0, bb / pa, 0),
+      k_percent = ifelse(pa > 0, so / pa, 0)
+    )
+    message(sprintf("    MLB Stats API: %d batters", nrow(mlb_df)))
+
+    # Savant expected stats (xwOBA, xBA)
+    sv_url <- sprintf("https://baseballsavant.mlb.com/leaderboard/expected_statistics?type=batter&year=%d&position=&team=&min=0&csv=true", yr)
+    sv_resp <- GET(sv_url, add_headers(`User-Agent` = "Mozilla/5.0"))
+    if (status_code(sv_resp) == 200) {
+      sv_text <- content(sv_resp, as = "text", encoding = "UTF-8")
+      sv_df <- read_csv(sv_text, show_col_types = FALSE) |> clean_names()
+      nm_sv <- names(sv_df)
+      pid_col <- nm_sv[grepl("player_id|playerid", nm_sv)][1]
+      xwoba_col <- nm_sv[grepl("est_woba", nm_sv)][1]
+      xba_col <- nm_sv[grepl("est_ba$", nm_sv)][1]
+      woba_col <- nm_sv[nm_sv == "woba"][1]
+      if (!is.na(pid_col)) {
+        sv_slim <- sv_df |> transmute(
+          playerid = as.character(.data[[pid_col]]),
+          xwoba = if (!is.na(xwoba_col)) safe_num(.data[[xwoba_col]]) else NA_real_,
+          xba = if (!is.na(xba_col)) safe_num(.data[[xba_col]]) else NA_real_,
+          woba = if (!is.na(woba_col)) safe_num(.data[[woba_col]]) else NA_real_
+        )
+        mlb_df <- mlb_df |> left_join(sv_slim, by = "playerid")
+        message(sprintf("    Savant expected stats merged: %d rows", nrow(sv_slim)))
+      }
+    }
+
+    # Savant statcast (barrel%, hard_hit%, exit_velocity)
+    sc_url <- sprintf("https://baseballsavant.mlb.com/leaderboard/statcast?type=batter&year=%d&position=&team=&min=0&csv=true", yr)
+    sc_resp <- GET(sc_url, add_headers(`User-Agent` = "Mozilla/5.0"))
+    if (status_code(sc_resp) == 200) {
+      sc_text <- content(sc_resp, as = "text", encoding = "UTF-8")
+      sc_df <- read_csv(sc_text, show_col_types = FALSE) |> clean_names()
+      nm_sc <- names(sc_df)
+      pid_col2 <- nm_sc[grepl("player_id|playerid", nm_sc)][1]
+      ev_col <- nm_sc[grepl("avg_hit_speed", nm_sc)][1]
+      brl_col <- nm_sc[grepl("brl_percent", nm_sc)][1]
+      hh_col <- nm_sc[grepl("ev95percent", nm_sc)][1]
+      if (!is.na(pid_col2)) {
+        sc_slim <- sc_df |> transmute(
+          playerid = as.character(.data[[pid_col2]]),
+          ev = if (!is.na(ev_col)) safe_num(.data[[ev_col]]) else NA_real_,
+          barrel_batted_rate = if (!is.na(brl_col)) safe_num(.data[[brl_col]]) else NA_real_,
+          hard_hit_percent = if (!is.na(hh_col)) safe_num(.data[[hh_col]]) else NA_real_
+        )
+        mlb_df <- mlb_df |> left_join(sc_slim, by = "playerid")
+        message(sprintf("    Savant statcast merged: %d rows", nrow(sc_slim)))
+      }
+    }
+
+    mlb_df
+  }, error = function(e) { message(sprintf("    Alt batter fetch failed: %s", e$message)); tibble() })
+}
+
+fetch_alt_pitch_leaders <- function(yr) {
+  message("  Trying alternative source: MLB Stats API + Baseball Savant (pitchers)...")
+  tryCatch({
+    mlb_url <- sprintf("https://statsapi.mlb.com/api/v1/stats?stats=season&group=pitching&season=%d&sportId=1&limit=5000&sortStat=inningsPitched&order=desc", yr)
+    mlb_resp <- GET(mlb_url)
+    if (status_code(mlb_resp) != 200) return(tibble())
+    mlb_data <- content(mlb_resp, as = "parsed")
+    splits <- mlb_data$stats[[1]]$splits
+    if (length(splits) == 0) return(tibble())
+
+    mlb_df <- map_dfr(splits, function(s) {
+      st <- s$stat
+      tibble(
+        playerid = as.character(s$player$id),
+        name = s$player$fullName,
+        team = ifelse(!is.null(s$team$abbreviation), s$team$abbreviation, ""),
+        age = st$age %||% NA_real_,
+        g = st$gamesPitched %||% st$gamesPlayed %||% 0,
+        gs = st$gamesStarted %||% 0,
+        ip = as.numeric(st$inningsPitched %||% 0),
+        era = as.numeric(st$era %||% 0),
+        whip = as.numeric(st$whip %||% 0),
+        so = st$strikeOuts %||% 0,
+        bb = st$baseOnBalls %||% 0,
+        bf = st$battersFaced %||% 0,
+        sv = st$saves %||% 0,
+        hld = st$holds %||% 0,
+        hr = st$homeRuns %||% 0
+      )
+    }) |> mutate(
+      k_percent = ifelse(bf > 0, so / bf, 0),
+      bb_percent = ifelse(bf > 0, bb / bf, 0)
+    )
+    message(sprintf("    MLB Stats API: %d pitchers", nrow(mlb_df)))
+
+    # Savant pitcher statcast
+    sc_url <- sprintf("https://baseballsavant.mlb.com/leaderboard/statcast?type=pitcher&year=%d&position=&team=&min=0&csv=true", yr)
+    sc_resp <- GET(sc_url, add_headers(`User-Agent` = "Mozilla/5.0"))
+    if (status_code(sc_resp) == 200) {
+      sc_text <- content(sc_resp, as = "text", encoding = "UTF-8")
+      sc_df <- read_csv(sc_text, show_col_types = FALSE) |> clean_names()
+      nm_sc <- names(sc_df)
+      pid_col <- nm_sc[grepl("player_id|playerid", nm_sc)][1]
+      hh_col <- nm_sc[grepl("ev95percent", nm_sc)][1]
+      if (!is.na(pid_col)) {
+        sc_slim <- sc_df |> transmute(
+          playerid = as.character(.data[[pid_col]]),
+          hard_hit_percent = if (!is.na(hh_col)) safe_num(.data[[hh_col]]) else NA_real_
+        )
+        mlb_df <- mlb_df |> left_join(sc_slim, by = "playerid")
+      }
+    }
+
+    mlb_df
+  }, error = function(e) { message(sprintf("    Alt pitcher fetch failed: %s", e$message)); tibble() })
+}
+
 message(sprintf("Fetching FanGraphs leaderboards for %d...", season_year))
-bat_leaders <- safe_fg_bat_leaders(season_year)
+bat_leaders <- fetch_with_retry(safe_fg_bat_leaders, "bat_leaders", season_year)
+if (nrow(bat_leaders) > 0) {
+  save_leader_cache(bat_leaders, "bat_leaders", season_year)
+} else {
+  message("  FanGraphs batter leaders unavailable, trying cache...")
+  bat_leaders <- load_leader_cache("bat_leaders", season_year)
+  if (nrow(bat_leaders) == 0) {
+    bat_leaders <- fetch_alt_bat_leaders(season_year)
+    if (nrow(bat_leaders) > 0) save_leader_cache(bat_leaders, "bat_leaders", season_year)
+  }
+}
 message(sprintf("  Batter leaders: %d rows", nrow(bat_leaders)))
-pitch_leaders <- safe_fg_pitch_leaders(season_year)
+
+Sys.sleep(2)
+
+pitch_leaders <- fetch_with_retry(safe_fg_pitch_leaders, "pitch_leaders", season_year)
+if (nrow(pitch_leaders) > 0) {
+  save_leader_cache(pitch_leaders, "pitch_leaders", season_year)
+} else {
+  message("  FanGraphs pitcher leaders unavailable, trying cache...")
+  pitch_leaders <- load_leader_cache("pitch_leaders", season_year)
+  if (nrow(pitch_leaders) == 0) {
+    pitch_leaders <- fetch_alt_pitch_leaders(season_year)
+    if (nrow(pitch_leaders) > 0) save_leader_cache(pitch_leaders, "pitch_leaders", season_year)
+  }
+}
 message(sprintf("  Pitcher leaders: %d rows", nrow(pitch_leaders)))
 
 resolve_player_ids <- function(df) {
@@ -620,34 +827,106 @@ agg_pitcher_logs <- function(logs, start_date = NULL, end_date = NULL) {
   )
 }
 
+# Look up a player in a leaderboard by FG ID, MLB ID, or normalized name
+find_in_leaders <- function(ldr, fg_id, mlb_id, player_name) {
+  if (nrow(ldr) == 0) return(ldr[0, , drop = FALSE])
+  pid_col <- safe_chr(coalesce_col(ldr, c("playerid")))
+  # Try FG ID
+  row <- ldr[pid_col == safe_chr(fg_id), , drop = FALSE]
+  if (nrow(row) > 0) return(row[1, , drop = FALSE])
+  # Try MLB ID
+  row <- ldr[pid_col == safe_chr(mlb_id), , drop = FALSE]
+  if (nrow(row) > 0) return(row[1, , drop = FALSE])
+  # Try name
+  ldr_names <- norm_name(coalesce_col(ldr, c("name", "player_name")))
+  row <- ldr[ldr_names == norm_name(player_name), , drop = FALSE]
+  if (nrow(row) > 0) return(row[1, , drop = FALSE])
+  ldr[0, , drop = FALSE]
+}
+
+# Test if FG game logs are working (called once per build function)
+fg_game_logs_available <- NULL
+test_fg_availability <- function(fg_id) {
+  if (!is.null(fg_game_logs_available)) return(fg_game_logs_available)
+  test <- safe_fg_batter_logs(fg_id, season_year)
+  fg_game_logs_available <<- nrow(test) > 0
+  if (!fg_game_logs_available) message("  FG game logs unavailable, using leaderboard data")
+  fg_game_logs_available
+}
+
 build_raw_mlb_hitters <- function(players) {
   pool <- players |> filter(level == "MLB", role == "H")
   n_total <- nrow(pool)
   message(sprintf("Building raw MLB hitters: %d players", n_total))
+  if (n_total == 0) return(tibble())
+
+  # Test FG availability with first player
+  fg_ok <- test_fg_availability(pool$fangraphs_id[[1]])
+
   out <- pool |>
     mutate(row_id = row_number()) |>
     group_split(row_id, .keep = TRUE) |>
     map_dfr(function(p) {
-      if (p$row_id[[1]] > 1) Sys.sleep(0.5)
       message(sprintf("  [%d/%d] %s", p$row_id[[1]], n_total, p$player_name[[1]]))
-      logs <- safe_fg_batter_logs(p$fangraphs_id[[1]], season_year)
-      t14 <- agg_hitter_logs(logs, t14_start, t14_end)
-      season <- agg_hitter_logs(logs)
 
-      sc14 <- safe_statcast_batter(p$mlbid[[1]], t14_start, t14_end) |> agg_statcast_hitter()
-      sc_end <- min(t14_end, as.Date(paste0(season_year, "-12-31")))
-      sc_season <- safe_statcast_batter(p$mlbid[[1]], paste0(season_year, "-01-01"), sc_end) |> agg_statcast_hitter()
+      # FG game logs path (when available)
+      if (fg_ok) {
+        if (p$row_id[[1]] > 1) Sys.sleep(1.5)
+        logs <- safe_fg_batter_logs(p$fangraphs_id[[1]], season_year)
+        t14 <- agg_hitter_logs(logs, t14_start, t14_end)
+        season <- agg_hitter_logs(logs)
+        sc14 <- safe_statcast_batter(p$mlbid[[1]], t14_start, t14_end) |> agg_statcast_hitter()
+        sc_end <- min(t14_end, as.Date(paste0(season_year, "-12-31")))
+        sc_season <- safe_statcast_batter(p$mlbid[[1]], paste0(season_year, "-01-01"), sc_end) |> agg_statcast_hitter()
+      } else {
+        t14 <- agg_hitter_logs(tibble())
+        season <- agg_hitter_logs(tibble())
+        sc14 <- agg_statcast_hitter(tibble())
+        sc_season <- agg_statcast_hitter(tibble())
+      }
 
-      # Fallback: pull xwOBA/xBA from FanGraphs leaderboard if Statcast returned empty
-      fg_id <- safe_chr(p$fangraphs_id[[1]])
-      ldr_row <- bat_leaders[safe_chr(coalesce_col(bat_leaders, c("playerid"))) == fg_id, , drop = FALSE]
+      # Leaderboard fallback for season stats (works with both FG and alt cache data)
+      ldr_row <- find_in_leaders(bat_leaders, p$fangraphs_id[[1]], p$mlbid[[1]], p$player_name[[1]])
       if (nrow(ldr_row) > 0) {
         ldr_xwoba <- safe_num(coalesce_col(ldr_row[1,], c("xwoba", "x_woba", "xw_oba")))
         ldr_xba <- safe_num(coalesce_col(ldr_row[1,], c("xba", "x_ba", "x_avg")))
+        ldr_wrc <- safe_num(coalesce_col(ldr_row[1,], c("wrc_2", "wrc_plus", "w_rc_2")))
+        ldr_ev <- safe_num(coalesce_col(ldr_row[1,], c("ev", "exit_velocity")))
+        ldr_brl <- safe_num(coalesce_col(ldr_row[1,], c("barrel_batted_rate", "barrel_pct")))
+        ldr_hh <- safe_num(coalesce_col(ldr_row[1,], c("hard_hit_percent", "hard_hit_pct")))
         if (!is.na(ldr_xwoba[1])) sc_season$xwoba <- sc_season$xwoba %||% ldr_xwoba[1]
         if (!is.na(ldr_xba[1])) sc_season$xba <- sc_season$xba %||% ldr_xba[1]
-        ldr_wrc <- safe_num(coalesce_col(ldr_row[1,], c("wrc_2", "wrc_plus", "w_rc_2")))
         if (!is.na(ldr_wrc[1]) && ldr_wrc[1] > 10) season$wrc_plus <- season$wrc_plus %||% ldr_wrc[1]
+        if (!is.na(ldr_ev[1])) sc_season$exit_velocity <- sc_season$exit_velocity %||% ldr_ev[1]
+        if (!is.na(ldr_brl[1])) sc_season$barrel_pct <- sc_season$barrel_pct %||% ldr_brl[1]
+        if (!is.na(ldr_hh[1])) sc_season$hard_hit_pct <- sc_season$hard_hit_pct %||% ldr_hh[1]
+        # Fill basic season stats from leaderboard when game logs are empty
+        ldr_pa <- safe_num(coalesce_col(ldr_row[1,], c("pa")))[1]
+        ldr_hr <- safe_num(coalesce_col(ldr_row[1,], c("hr")))[1]
+        ldr_sb <- safe_num(coalesce_col(ldr_row[1,], c("sb")))[1]
+        ldr_avg <- safe_num(coalesce_col(ldr_row[1,], c("avg")))[1]
+        ldr_obp <- safe_num(coalesce_col(ldr_row[1,], c("obp")))[1]
+        ldr_slg <- safe_num(coalesce_col(ldr_row[1,], c("slg")))[1]
+        ldr_ops <- safe_num(coalesce_col(ldr_row[1,], c("ops")))[1]
+        ldr_iso <- safe_num(coalesce_col(ldr_row[1,], c("iso")))[1]
+        ldr_woba <- safe_num(coalesce_col(ldr_row[1,], c("woba")))[1]
+        ldr_bb_pct <- safe_num(coalesce_col(ldr_row[1,], c("bb_percent", "bb_pct")))[1]
+        ldr_k_pct <- safe_num(coalesce_col(ldr_row[1,], c("k_percent", "k_pct")))[1]
+        ldr_age <- safe_num(coalesce_col(ldr_row[1,], c("age")))[1]
+        ldr_team <- safe_chr(coalesce_col(ldr_row[1,], c("team")))[1]
+        if (!is.na(ldr_pa)) season$pa <- season$pa %||% ldr_pa
+        if (!is.na(ldr_hr)) season$hr <- season$hr %||% ldr_hr
+        if (!is.na(ldr_sb)) season$sb <- season$sb %||% ldr_sb
+        if (!is.na(ldr_avg)) season$avg <- season$avg %||% ldr_avg
+        if (!is.na(ldr_obp)) season$obp <- season$obp %||% ldr_obp
+        if (!is.na(ldr_slg)) season$slg <- season$slg %||% ldr_slg
+        if (!is.na(ldr_ops)) season$ops <- season$ops %||% ldr_ops
+        if (!is.na(ldr_iso)) season$iso <- season$iso %||% ldr_iso
+        if (!is.na(ldr_woba)) season$woba <- season$woba %||% ldr_woba
+        if (!is.na(ldr_bb_pct)) season$bb_pct <- season$bb_pct %||% ldr_bb_pct
+        if (!is.na(ldr_k_pct)) season$k_pct <- season$k_pct %||% ldr_k_pct
+        if (!is.na(ldr_age)) season$age <- season$age %||% ldr_age
+        if (!is.na(ldr_team) && ldr_team != "") season$team <- season$team %||% ldr_team
       }
 
       tibble(
@@ -737,23 +1016,33 @@ build_raw_mlb_pitchers <- function(players) {
   pool <- players |> filter(level == "MLB", role == "P")
   n_total <- nrow(pool)
   message(sprintf("Building raw MLB pitchers: %d players", n_total))
+  if (n_total == 0) return(tibble())
+
+  fg_ok <- !is.null(fg_game_logs_available) && fg_game_logs_available
+
   out <- pool |>
     mutate(row_id = row_number()) |>
     group_split(row_id, .keep = TRUE) |>
     map_dfr(function(p) {
-      if (p$row_id[[1]] > 1) Sys.sleep(0.5)
       message(sprintf("  [%d/%d] %s", p$row_id[[1]], n_total, p$player_name[[1]]))
-      logs <- safe_fg_pitcher_logs(p$fangraphs_id[[1]], season_year)
-      t14 <- agg_pitcher_logs(logs, t14_start, t14_end)
-      season <- agg_pitcher_logs(logs)
 
-      sc14 <- safe_statcast_pitcher(p$mlbid[[1]], t14_start, t14_end) |> agg_statcast_pitcher()
-      sc_end_p <- min(t14_end, as.Date(paste0(season_year, "-12-31")))
-      sc_season <- safe_statcast_pitcher(p$mlbid[[1]], paste0(season_year, "-01-01"), sc_end_p) |> agg_statcast_pitcher()
+      if (fg_ok) {
+        if (p$row_id[[1]] > 1) Sys.sleep(1.5)
+        logs <- safe_fg_pitcher_logs(p$fangraphs_id[[1]], season_year)
+        t14 <- agg_pitcher_logs(logs, t14_start, t14_end)
+        season <- agg_pitcher_logs(logs)
+        sc14 <- safe_statcast_pitcher(p$mlbid[[1]], t14_start, t14_end) |> agg_statcast_pitcher()
+        sc_end_p <- min(t14_end, as.Date(paste0(season_year, "-12-31")))
+        sc_season <- safe_statcast_pitcher(p$mlbid[[1]], paste0(season_year, "-01-01"), sc_end_p) |> agg_statcast_pitcher()
+      } else {
+        t14 <- agg_pitcher_logs(tibble())
+        season <- agg_pitcher_logs(tibble())
+        sc14 <- agg_statcast_pitcher(tibble())
+        sc_season <- agg_statcast_pitcher(tibble())
+      }
 
-      # Pull leaderboard stats not available in game logs
-      fg_id_p <- safe_chr(p$fangraphs_id[[1]])
-      ldr_p <- pitch_leaders[safe_chr(coalesce_col(pitch_leaders, c("playerid"))) == fg_id_p, , drop = FALSE]
+      # Pull leaderboard stats (works with both FG and alt cache data)
+      ldr_p <- find_in_leaders(pitch_leaders, p$fangraphs_id[[1]], p$mlbid[[1]], p$player_name[[1]])
       ldr_stuff <- NA_real_; ldr_loc <- NA_real_; ldr_pitching <- NA_real_
       ldr_xfip_minus <- NA_real_; ldr_fip_minus <- NA_real_
       ldr_velo <- NA_real_; ldr_xfip <- NA_real_
@@ -765,6 +1054,39 @@ build_raw_mlb_pitchers <- function(players) {
         ldr_fip_minus <- safe_num(coalesce_col(ldr_p[1,], c("fip_2", "fip_minus")))[1]
         ldr_velo <- safe_num(coalesce_col(ldr_p[1,], c("f_bv", "fbv", "velo")))[1]
         ldr_xfip <- safe_num(coalesce_col(ldr_p[1,], c("x_fip", "xfip")))[1]
+        # Fill basic season stats from leaderboard
+        ldr_era <- safe_num(coalesce_col(ldr_p[1,], c("era")))[1]
+        ldr_whip <- safe_num(coalesce_col(ldr_p[1,], c("whip")))[1]
+        ldr_ip <- safe_num(coalesce_col(ldr_p[1,], c("ip")))[1]
+        ldr_g <- safe_num(coalesce_col(ldr_p[1,], c("g")))[1]
+        ldr_gs <- safe_num(coalesce_col(ldr_p[1,], c("gs")))[1]
+        ldr_k_pct <- safe_num(coalesce_col(ldr_p[1,], c("k_percent", "k_pct")))[1]
+        ldr_bb_pct <- safe_num(coalesce_col(ldr_p[1,], c("bb_percent", "bb_pct")))[1]
+        ldr_sv <- safe_num(coalesce_col(ldr_p[1,], c("sv")))[1]
+        ldr_hld <- safe_num(coalesce_col(ldr_p[1,], c("hld")))[1]
+        ldr_hr <- safe_num(coalesce_col(ldr_p[1,], c("hr")))[1]
+        ldr_fip_val <- safe_num(coalesce_col(ldr_p[1,], c("fip")))[1]
+        ldr_siera <- safe_num(coalesce_col(ldr_p[1,], c("siera")))[1]
+        ldr_swstr <- safe_num(coalesce_col(ldr_p[1,], c("sw_str_percent", "sw_str_pct")))[1]
+        ldr_hh <- safe_num(coalesce_col(ldr_p[1,], c("hard_hit_percent", "hard_hit_pct")))[1]
+        ldr_age <- safe_num(coalesce_col(ldr_p[1,], c("age")))[1]
+        ldr_team <- safe_chr(coalesce_col(ldr_p[1,], c("team")))[1]
+        if (!is.na(ldr_era)) season$era <- season$era %||% ldr_era
+        if (!is.na(ldr_whip)) season$whip <- season$whip %||% ldr_whip
+        if (!is.na(ldr_ip)) season$ip <- season$ip %||% ldr_ip
+        if (!is.na(ldr_g)) season$games <- season$games %||% ldr_g
+        if (!is.na(ldr_gs)) season$gs <- season$gs %||% ldr_gs
+        if (!is.na(ldr_k_pct)) season$k_pct <- season$k_pct %||% ldr_k_pct
+        if (!is.na(ldr_bb_pct)) season$bb_pct <- season$bb_pct %||% ldr_bb_pct
+        if (!is.na(ldr_fip_val)) season$fip <- season$fip %||% ldr_fip_val
+        if (!is.na(ldr_siera)) season$siera <- season$siera %||% ldr_siera
+        if (!is.na(ldr_swstr)) season$swstr_pct <- season$swstr_pct %||% ldr_swstr
+        if (!is.na(ldr_hh)) season$hard_hit_pct_against <- season$hard_hit_pct_against %||% ldr_hh
+        if (!is.na(ldr_hr)) season$hr <- season$hr %||% ldr_hr
+        ldr_sh <- ifelse(is.na(ldr_sv), 0, ldr_sv) + ifelse(is.na(ldr_hld), 0, ldr_hld)
+        if (ldr_sh > 0) season$saves_holds <- season$saves_holds %||% ldr_sh
+        if (!is.na(ldr_age)) season$age <- season$age %||% ldr_age
+        if (!is.na(ldr_team) && ldr_team != "") season$team <- season$team %||% ldr_team
       }
 
       tibble(
@@ -853,13 +1175,17 @@ build_raw_milb_hitters <- function(players) {
   pool <- players |> filter(level == "MiLB", role == "H")
   n_total <- nrow(pool)
   message(sprintf("Building raw MiLB hitters: %d players", n_total))
+  if (n_total == 0) return(tibble())
+
+  fg_ok <- !is.null(fg_game_logs_available) && fg_game_logs_available
+
   out <- pool |>
     mutate(row_id = row_number()) |>
     group_split(row_id, .keep = TRUE) |>
     map_dfr(function(p) {
-      if (p$row_id[[1]] > 1) Sys.sleep(0.5)
+      if (fg_ok && p$row_id[[1]] > 1) Sys.sleep(1.5)
       message(sprintf("  [%d/%d] %s", p$row_id[[1]], n_total, p$player_name[[1]]))
-      logs <- safe_fg_milb_batter_logs(p$fangraphs_id[[1]], season_year)
+      logs <- if (fg_ok) safe_fg_milb_batter_logs(p$fangraphs_id[[1]], season_year) else tibble()
       t14 <- agg_hitter_logs(logs, t14_start, t14_end)
       season <- agg_hitter_logs(logs)
 
@@ -949,13 +1275,17 @@ build_raw_milb_pitchers <- function(players) {
   pool <- players |> filter(level == "MiLB", role == "P")
   n_total <- nrow(pool)
   message(sprintf("Building raw MiLB pitchers: %d players", n_total))
+  if (n_total == 0) return(tibble())
+
+  fg_ok <- !is.null(fg_game_logs_available) && fg_game_logs_available
+
   out <- pool |>
     mutate(row_id = row_number()) |>
     group_split(row_id, .keep = TRUE) |>
     map_dfr(function(p) {
-      if (p$row_id[[1]] > 1) Sys.sleep(0.5)
+      if (fg_ok && p$row_id[[1]] > 1) Sys.sleep(1.5)
       message(sprintf("  [%d/%d] %s", p$row_id[[1]], n_total, p$player_name[[1]]))
-      logs <- safe_fg_milb_pitcher_logs(p$fangraphs_id[[1]], season_year)
+      logs <- if (fg_ok) safe_fg_milb_pitcher_logs(p$fangraphs_id[[1]], season_year) else tibble()
       t14 <- agg_pitcher_logs(logs, t14_start, t14_end)
       season <- agg_pitcher_logs(logs)
 
@@ -1462,21 +1792,38 @@ compute_free_agents <- function(fa_df) {
       k_minus_bb_pct = ifelse(!is.na(k_pct) & !is.na(bb_pct), k_pct - bb_pct, NA_real_)
     )
 
-  # Join FA to batter leaderboard by FG ID, then name fallback
+  # Join FA to batter leaderboard: FG ID -> MLB ID -> name fallback
   fa_bat <- fa_df |>
     inner_join(bat_ref, by = c("fangraphs_id" = "fg_id")) |>
     filter(!is.na(pa) & pa > 0)
-  # Name fallback for unmatched
+  # MLB ID fallback for unmatched (cache uses MLB IDs as playerid)
+  if ("mlbid" %in% names(fa_df)) {
+    unmatched_mlb_bat <- fa_df |>
+      filter(!player_clean %in% fa_bat$player_clean) |>
+      mutate(mlbid_chr = safe_chr(mlbid)) |>
+      inner_join(bat_ref, by = c("mlbid_chr" = "fg_id")) |>
+      filter(!is.na(pa) & pa > 0)
+    fa_bat <- bind_rows(fa_bat, unmatched_mlb_bat) |> distinct(player_clean, .keep_all = TRUE)
+  }
+  # Name fallback for still-unmatched
   unmatched_bat <- fa_df |>
     filter(!player_clean %in% fa_bat$player_clean) |>
     inner_join(bat_ref, by = c("player_clean" = "name_ref")) |>
     filter(!is.na(pa) & pa > 0)
   fa_bat <- bind_rows(fa_bat, unmatched_bat) |> distinct(player_clean, .keep_all = TRUE)
 
-  # Join FA to pitcher leaderboard
+  # Join FA to pitcher leaderboard: FG ID -> MLB ID -> name fallback
   fa_pitch <- fa_df |>
     inner_join(pitch_ref, by = c("fangraphs_id" = "fg_id")) |>
     filter(!is.na(ip) & ip > 0)
+  if ("mlbid" %in% names(fa_df)) {
+    unmatched_mlb_pitch <- fa_df |>
+      filter(!player_clean %in% fa_pitch$player_clean) |>
+      mutate(mlbid_chr = safe_chr(mlbid)) |>
+      inner_join(pitch_ref, by = c("mlbid_chr" = "fg_id")) |>
+      filter(!is.na(ip) & ip > 0)
+    fa_pitch <- bind_rows(fa_pitch, unmatched_mlb_pitch) |> distinct(player_clean, .keep_all = TRUE)
+  }
   unmatched_pitch <- fa_df |>
     filter(!player_clean %in% fa_pitch$player_clean) |>
     inner_join(pitch_ref, by = c("player_clean" = "name_ref")) |>
