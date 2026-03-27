@@ -610,6 +610,36 @@ if (nrow(pitch_leaders) > 0) {
 }
 message(sprintf("  Pitcher leaders: %d rows", nrow(pitch_leaders)))
 
+fetch_il_status <- function(yr = season_year) {
+  tryCatch({
+    team_ids <- tryCatch(
+      baseballr::mlb_teams(season = yr, sport_ids = 1) |>
+        clean_names() |>
+        pull(team_id),
+      error = function(e) {
+        c(108, 109, 110, 111, 112, 113, 114, 115, 116, 117,
+          118, 119, 120, 121, 133, 134, 135, 136, 137, 138,
+          139, 140, 141, 142, 143, 144, 145, 146, 147, 158)
+      }
+    )
+
+    rosters <- map_dfr(team_ids, function(tid) {
+      tryCatch(
+        baseballr::mlb_rosters(team_id = tid, roster_type = "injuries", season = yr) |>
+          clean_names(),
+        error = function(e) tibble()
+      )
+    })
+
+    if (nrow(rosters) == 0) return(character(0))
+
+    id_col <- intersect(c("person_id", "player_id", "id"), names(rosters))[1]
+    if (is.na(id_col)) return(character(0))
+
+    unique(as.character(rosters[[id_col]]))
+  }, error = function(e) character(0))
+}
+
 resolve_player_ids <- function(df) {
   df <- df |> clean_names()
   nm <- names(df)
@@ -939,6 +969,7 @@ build_raw_mlb_hitters <- function(players) {
         savant_url = savant_url(p$mlbid[[1]]),
         fg_profile = fg_link_formula(p$fangraphs_id[[1]]),
         savant_profile = savant_link_formula(p$mlbid[[1]]),
+        on_il = isTRUE(p$on_il[[1]]),
 
         t14_games = t14$games,
         t14_pa = t14$pa,
@@ -1099,6 +1130,7 @@ build_raw_mlb_pitchers <- function(players) {
         savant_url = savant_url(p$mlbid[[1]]),
         fg_profile = fg_link_formula(p$fangraphs_id[[1]]),
         savant_profile = savant_link_formula(p$mlbid[[1]]),
+        on_il = isTRUE(p$on_il[[1]]),
 
         t14_games = t14$games,
         t14_innings = t14$ip,
@@ -1200,6 +1232,7 @@ build_raw_milb_hitters <- function(players) {
         savant_url = savant_url(p$mlbid[[1]]),
         fg_profile = fg_link_formula(p$fangraphs_id[[1]]),
         savant_profile = savant_link_formula(p$mlbid[[1]]),
+        on_il = isTRUE(p$on_il[[1]]),
 
         t14_games = t14$games,
         t14_pa = t14$pa,
@@ -1299,6 +1332,7 @@ build_raw_milb_pitchers <- function(players) {
         savant_url = savant_url(p$mlbid[[1]]),
         fg_profile = fg_link_formula(p$fangraphs_id[[1]]),
         savant_profile = savant_link_formula(p$mlbid[[1]]),
+        on_il = isTRUE(p$on_il[[1]]),
 
         t14_games = t14$games,
         t14_innings = t14$ip,
@@ -1419,7 +1453,7 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
   } else {
   mlb_h <- raw_hitters |>
     transmute(
-      player = name, team, mlbid, fangraphs_id,
+      player = name, team, mlbid, fangraphs_id, on_il,
       core_1 = season_xwoba,
       core_2 = season_barrel_pct,
       core_3 = season_hard_hit_pct,
@@ -1471,7 +1505,7 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
   } else {
   mlb_p <- raw_pitchers |>
     transmute(
-      player = name, team, mlbid, fangraphs_id,
+      player = name, team, mlbid, fangraphs_id, on_il,
       core_1 = season_k_minus_bb_pct,
       core_2 = season_siera,
       core_3 = season_xfip,
@@ -1523,7 +1557,7 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
   } else {
   milb_h <- raw_milb_hitters |>
     transmute(
-      player = name, team, mlbid, fangraphs_id,
+      player = name, team, mlbid, fangraphs_id, on_il,
       core_1 = season_wrc_plus,
       core_2 = season_bb_minus_k_pct,
       core_3 = season_iso,
@@ -1575,7 +1609,7 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
   } else {
   milb_p <- raw_milb_pitchers |>
     transmute(
-      player = name, team, mlbid, fangraphs_id,
+      player = name, team, mlbid, fangraphs_id, on_il,
       core_1 = season_k_minus_bb_pct,
       core_2 = season_fip,
       core_3 = season_xfip,
@@ -1657,7 +1691,7 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
       trade_value = round(dynasty_war_3yr * WAR_PARAMS$trade_value_multiplier, 0)
     ) |>
     select(
-      player, team, level, role, mlbid, fangraphs_id,
+      player, team, level, role, mlbid, fangraphs_id, on_il,
       core_1_name, core_1,
       core_2_name, core_2,
       core_3_name, core_3,
@@ -1989,6 +2023,10 @@ main <- function() {
     sum(test_players$role == "H", na.rm = TRUE),
     sum(test_players$role == "P", na.rm = TRUE)
   ))
+
+  il_ids <- fetch_il_status()
+  test_players <- test_players |>
+    mutate(on_il = mlbid %in% il_ids)
 
   raw_hitters <- build_raw_mlb_hitters(test_players)
   raw_pitchers <- build_raw_mlb_pitchers(test_players)
