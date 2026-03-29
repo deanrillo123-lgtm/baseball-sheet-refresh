@@ -126,8 +126,15 @@ retry_with_backoff <- function(fn, max_attempts = 3, base_delay = 2) {
 }
 
 safe_read_sheet <- function(tab) {
-  tryCatch(
-    retry_with_backoff(function() read_sheet(sheet_id, sheet = tab) |> clean_names()),
+  tryCatch({
+    df <- retry_with_backoff(function() read_sheet(sheet_id, sheet = tab) |> clean_names())
+    # Google Sheets returns list columns when cells have mixed types or are empty.
+    # Unlist them here so downstream code can safely do numeric/character operations.
+    if (any(sapply(df, is.list))) {
+      df <- df |> mutate(across(where(is.list), ~sapply(., function(x) if (is.null(x) || length(x) == 0) NA else x[[1]])))
+    }
+    df
+  },
     error = function(e) {
       message(sprintf("  Warning: could not read tab '%s': %s", tab, conditionMessage(e)))
       tibble()
@@ -612,6 +619,9 @@ message(sprintf("  Pitcher leaders: %d rows", nrow(pitch_leaders)))
 
 resolve_player_ids <- function(df) {
   df <- df |> clean_names()
+  # Unlist any list-type columns from Google Sheets (mixed types / empty cells)
+  df <- df |>
+    mutate(across(where(is.list), ~sapply(., function(x) if (is.null(x) || length(x) == 0) NA else x[[1]])))
   nm <- names(df)
 
   message(sprintf("  Columns after clean_names: %s", paste(names(df), collapse = ", ")))
