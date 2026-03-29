@@ -1706,6 +1706,10 @@ compute_free_agents <- function(fa_df) {
 
   fa_df <- fa_df |> clean_names()
 
+  # Unlist any list-type columns from Google Sheets (mixed types / empty cells)
+  fa_df <- fa_df |>
+    mutate(across(where(is.list), ~sapply(., function(x) if (is.null(x) || length(x) == 0) NA else x[[1]])))
+
   # Resolve column names
   if (!"player" %in% names(fa_df)) {
     for (cand in c("player_name", "name")) {
