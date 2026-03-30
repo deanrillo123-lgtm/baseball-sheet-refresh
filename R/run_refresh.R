@@ -760,6 +760,27 @@ if (nrow(pitch_leaders) > 0) {
 }
 message(sprintf("  Pitcher leaders: %d rows", nrow(pitch_leaders)))
 
+# Recalculate FIP with league-derived constant regardless of data source.
+if (nrow(pitch_leaders) > 0 && all(c("ip", "era", "hr", "bb", "so") %in% names(pitch_leaders))) {
+  pl_ip <- pitch_leaders$ip
+  # Convert baseball IP notation if needed (values like 182.1 where .1 = 1/3 inning)
+  frac <- round((pl_ip - trunc(pl_ip)) * 10)
+  if (any(frac > 2, na.rm = TRUE) == FALSE && any(frac > 0, na.rm = TRUE)) {
+    pl_ip <- trunc(pl_ip) + frac / 3
+  }
+  lg_era <- weighted.mean(pitch_leaders$era, pl_ip, na.rm = TRUE)
+  lg_hr  <- sum(pitch_leaders$hr, na.rm = TRUE)
+  lg_bb  <- sum(pitch_leaders$bb, na.rm = TRUE)
+  lg_so  <- sum(pitch_leaders$so, na.rm = TRUE)
+  lg_ip  <- sum(pl_ip, na.rm = TRUE)
+  fip_c  <- if (lg_ip > 0) lg_era - ((13 * lg_hr + 3 * lg_bb - 2 * lg_so) / lg_ip) else 3.2
+  message(sprintf("  FIP constant: %.3f (lgERA=%.3f, lgIP=%.1f)", fip_c, lg_era, lg_ip))
+  pitch_leaders <- pitch_leaders |> mutate(
+    fip = ifelse(pl_ip > 0, ((13 * hr) + (3 * bb) - (2 * so)) / pl_ip + fip_c, NA_real_)
+  )
+  save_leader_cache(pitch_leaders, "pitch_leaders", season_year)
+}
+
 resolve_player_ids <- function(df) {
   df <- df |> clean_names()
   # Unlist any list-type columns from Google Sheets (mixed types / empty cells)
