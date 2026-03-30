@@ -279,11 +279,67 @@ percentile_rank <- function(x, higher_is_better = TRUE) {
   out
 }
 
-add_percentiles <- function(df, metric_map) {
+# Rank player values against a full reference distribution (league-wide percentiles)
+percentile_rank_vs_ref <- function(player_vals, ref_vals, higher_is_better = TRUE) {
+  player_vals <- safe_num(player_vals)
+  ref_vals <- safe_num(ref_vals)
+  ref_clean <- ref_vals[!is.na(ref_vals)]
+  if (length(ref_clean) < 2) return(rep(NA_real_, length(player_vals)))
+  out <- rep(NA_real_, length(player_vals))
+  for (i in seq_along(player_vals)) {
+    v <- player_vals[i]
+    if (is.na(v)) next
+    if (higher_is_better) {
+      out[i] <- round(100 * sum(ref_clean <= v) / length(ref_clean), 1)
+    } else {
+      out[i] <- round(100 * sum(ref_clean >= v) / length(ref_clean), 1)
+    }
+  }
+  out
+}
+
+# Column name mapping: roster column (after stripping season_) -> leaderboard column
+LDR_COL_MAP <- c(
+  xwoba = "xwoba", xba = "xba", woba = "woba",
+  barrel_pct = "barrel_batted_rate", hard_hit_pct = "hard_hit_percent",
+  exit_velocity = "ev", bb_minus_k_pct = "bb_minus_k_pct",
+  hr = "hr", sb = "sb", ops = "ops", iso = "iso",
+  avg = "avg", obp = "obp", slg = "slg",
+  bb_pct = "bb_percent", k_pct = "k_percent",
+  wrc_plus = "wrc_plus",
+  # Pitcher columns
+  k_minus_bb_pct = "k_minus_bb_pct",
+  siera = "siera", xfip = "x_fip", fip = "fip",
+  swstr_pct = "sw_str_percent", velocity = "f_bv",
+  era = "era", whip = "whip", innings = "ip",
+  stuff_plus = "sp_stuff",
+  hard_hit_pct_against = "hard_hit_percent",
+  saves_holds = "saves_holds", hr_against = "hr"
+)
+
+add_percentiles <- function(df, metric_map, ref_df = NULL) {
+  # Pre-compute derived columns in ref_df if needed
+  if (!is.null(ref_df)) {
+    if ("bb_percent" %in% names(ref_df) && "k_percent" %in% names(ref_df)) {
+      ref_df$bb_minus_k_pct <- safe_num(ref_df$bb_percent) - safe_num(ref_df$k_percent)
+      ref_df$k_minus_bb_pct <- safe_num(ref_df$k_percent) - safe_num(ref_df$bb_percent)
+    }
+    if ("sv" %in% names(ref_df) && "hld" %in% names(ref_df)) {
+      ref_df$saves_holds <- safe_num(ref_df$sv) + safe_num(ref_df$hld)
+    }
+  }
   out <- df
   for (nm in names(metric_map)) {
     if (nm %in% names(out)) {
-      out[[paste0(nm, "_pctile")]] <- percentile_rank(out[[nm]], higher_is_better = metric_map[[nm]])
+      stripped <- sub("^(t14_|season_)", "", nm)
+      ldr_col <- LDR_COL_MAP[[stripped]]
+      if (!is.null(ref_df) && !is.null(ldr_col) && ldr_col %in% names(ref_df) && !grepl("^t14_", nm)) {
+        out[[paste0(nm, "_pctile")]] <- percentile_rank_vs_ref(
+          out[[nm]], ref_df[[ldr_col]], higher_is_better = metric_map[[nm]]
+        )
+      } else {
+        out[[paste0(nm, "_pctile")]] <- percentile_rank(out[[nm]], higher_is_better = metric_map[[nm]])
+      }
     } else {
       out[[paste0(nm, "_pctile")]] <- NA_real_
     }
@@ -527,6 +583,14 @@ fetch_alt_bat_leaders <- function(yr) {
       }
     }
 
+    # Approximate wRC+ from wOBA: wRC+ = ((wOBA - lgwOBA) / wOBA_scale + lgR_PA) / lgR_PA * 100
+    # Using 2025 league averages: lgwOBA ~.310, wOBA_scale ~1.15, lgR/PA ~.115
+    if ("woba" %in% names(mlb_df)) {
+      mlb_df <- mlb_df |> mutate(
+        wrc_plus = ifelse(!is.na(woba), round(((woba - 0.310) / 1.15 + 0.115) / 0.115 * 100, 1), NA_real_)
+      )
+    }
+
     mlb_df
   }, error = function(e) { message(sprintf("    Alt batter fetch failed: %s", e$message)); tibble() })
 }
@@ -562,11 +626,12 @@ fetch_alt_pitch_leaders <- function(yr) {
       )
     }) |> mutate(
       k_percent = ifelse(bf > 0, so / bf, 0),
-      bb_percent = ifelse(bf > 0, bb / bf, 0)
+      bb_percent = ifelse(bf > 0, bb / bf, 0),
+      fip = ifelse(ip > 0, ((13 * hr) + (3 * bb) - (2 * so)) / ip + 3.2, NA_real_)
     )
     message(sprintf("    MLB Stats API: %d pitchers", nrow(mlb_df)))
 
-    # Savant pitcher statcast
+    # Savant pitcher statcast (exit velo, hard hit against)
     sc_url <- sprintf("https://baseballsavant.mlb.com/leaderboard/statcast?type=pitcher&year=%d&position=&team=&min=0&csv=true", yr)
     sc_resp <- GET(sc_url, add_headers(`User-Agent` = "Mozilla/5.0"))
     if (status_code(sc_resp) == 200) {
@@ -575,13 +640,64 @@ fetch_alt_pitch_leaders <- function(yr) {
       nm_sc <- names(sc_df)
       pid_col <- nm_sc[grepl("player_id|playerid", nm_sc)][1]
       hh_col <- nm_sc[grepl("ev95percent", nm_sc)][1]
+      ev_col <- nm_sc[grepl("avg_hit_speed", nm_sc)][1]
       if (!is.na(pid_col)) {
         sc_slim <- sc_df |> transmute(
           playerid = as.character(.data[[pid_col]]),
+          ev_against = if (!is.na(ev_col)) safe_num(.data[[ev_col]]) else NA_real_,
           hard_hit_percent = if (!is.na(hh_col)) safe_num(.data[[hh_col]]) else NA_real_
         )
         mlb_df <- mlb_df |> left_join(sc_slim, by = "playerid")
+        message(sprintf("    Savant statcast merged: %d rows", nrow(sc_slim)))
       }
+    }
+
+    # Savant expected pitching stats (xERA)
+    xp_url <- sprintf("https://baseballsavant.mlb.com/leaderboard/expected_statistics?type=pitcher&year=%d&position=&team=&min=0&csv=true", yr)
+    xp_resp <- GET(xp_url, add_headers(`User-Agent` = "Mozilla/5.0"))
+    if (status_code(xp_resp) == 200) {
+      xp_text <- content(xp_resp, as = "text", encoding = "UTF-8")
+      xp_df <- read_csv(xp_text, show_col_types = FALSE) |> clean_names()
+      nm_xp <- names(xp_df)
+      pid_col_xp <- nm_xp[grepl("player_id|playerid", nm_xp)][1]
+      xera_col <- nm_xp[nm_xp == "xera"][1]
+      xwoba_col <- nm_xp[grepl("est_woba", nm_xp)][1]
+      if (!is.na(pid_col_xp)) {
+        xp_slim <- xp_df |> transmute(
+          playerid = as.character(.data[[pid_col_xp]]),
+          xera = if (!is.na(xera_col)) safe_num(.data[[xera_col]]) else NA_real_,
+          xwoba_against = if (!is.na(xwoba_col)) safe_num(.data[[xwoba_col]]) else NA_real_
+        )
+        mlb_df <- mlb_df |> left_join(xp_slim, by = "playerid")
+        message(sprintf("    Savant expected stats merged: %d rows", nrow(xp_slim)))
+      }
+    }
+
+    # Savant pitch arsenals (fastball velocity)
+    pa_url <- sprintf("https://baseballsavant.mlb.com/leaderboard/pitch-arsenals?year=%d&min=0&type=avg_speed&hand=&csv=true", yr)
+    pa_resp <- GET(pa_url, add_headers(`User-Agent` = "Mozilla/5.0"))
+    if (status_code(pa_resp) == 200) {
+      pa_text <- content(pa_resp, as = "text", encoding = "UTF-8")
+      pa_df <- read_csv(pa_text, show_col_types = FALSE) |> clean_names()
+      nm_pa <- names(pa_df)
+      pid_col_pa <- nm_pa[grepl("^pitcher$|player_id|playerid", nm_pa)][1]
+      ff_col <- nm_pa[grepl("ff_avg_speed", nm_pa)][1]
+      if (!is.na(pid_col_pa) && !is.na(ff_col)) {
+        pa_slim <- pa_df |> transmute(
+          playerid = as.character(.data[[pid_col_pa]]),
+          f_bv = safe_num(.data[[ff_col]])
+        )
+        mlb_df <- mlb_df |> left_join(pa_slim, by = "playerid")
+        message(sprintf("    Savant pitch arsenals merged: %d rows", nrow(pa_slim)))
+      }
+    }
+
+    # Calculate xFIP from FIP components
+    if ("fip" %in% names(mlb_df)) {
+      lg_hr_fb_rate <- 0.10  # league average HR/FB rate
+      mlb_df <- mlb_df |> mutate(
+        x_fip = ifelse(ip > 0, ((13 * lg_hr_fb_rate * bf) + (3 * bb) - (2 * so)) / ip + 3.2, NA_real_)
+      )
     }
 
     mlb_df
@@ -864,7 +980,7 @@ test_fg_availability <- function(fg_id) {
   fg_game_logs_available
 }
 
-build_raw_mlb_hitters <- function(players) {
+build_raw_mlb_hitters <- function(players, ldr_ref = NULL) {
   pool <- players |> filter(level == "MLB", role == "H")
   n_total <- nrow(pool)
   message(sprintf("Building raw MLB hitters: %d players", n_total))
@@ -1019,10 +1135,10 @@ build_raw_mlb_hitters <- function(players) {
     season_xba = TRUE,
     season_exit_velocity = TRUE,
     season_wrc_plus = TRUE
-  ))
+  ), ref_df = ldr_ref)
 }
 
-build_raw_mlb_pitchers <- function(players) {
+build_raw_mlb_pitchers <- function(players, ldr_ref = NULL) {
   pool <- players |> filter(level == "MLB", role == "P")
   n_total <- nrow(pool)
   message(sprintf("Building raw MLB pitchers: %d players", n_total))
@@ -1178,7 +1294,7 @@ build_raw_mlb_pitchers <- function(players) {
     season_pitching_plus = TRUE,
     season_xfip_minus = FALSE,
     season_fip_minus = FALSE
-  ))
+  ), ref_df = ldr_ref)
 }
 
 build_raw_milb_hitters <- function(players) {
@@ -1441,34 +1557,34 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
       core_4_name = "BB%-K%",
       core_5_name = "SB",
       current_score = (
-        wh[["xwoba"]] * season_xwoba_pctile +
-        wh[["barrel_pct"]] * season_barrel_pct_pctile +
-        wh[["hard_hit_pct"]] * season_hard_hit_pct_pctile +
-        wh[["bb_minus_k_pct"]] * season_bb_minus_k_pct_pctile +
-        wh[["sb"]] * season_sb_pctile +
-        wh[["hr"]] * season_hr_pctile +
-        wh[["ops"]] * season_ops_pctile +
-        wh[["iso"]] * season_iso_pctile +
-        wh[["xba"]] * season_xba_pctile +
-        wh[["exit_velocity"]] * season_exit_velocity_pctile
+        wh[["xwoba"]] * coalesce(season_xwoba_pctile, 50) +
+        wh[["barrel_pct"]] * coalesce(season_barrel_pct_pctile, 50) +
+        wh[["hard_hit_pct"]] * coalesce(season_hard_hit_pct_pctile, 50) +
+        wh[["bb_minus_k_pct"]] * coalesce(season_bb_minus_k_pct_pctile, 50) +
+        wh[["sb"]] * coalesce(season_sb_pctile, 50) +
+        wh[["hr"]] * coalesce(season_hr_pctile, 50) +
+        wh[["ops"]] * coalesce(season_ops_pctile, 50) +
+        wh[["iso"]] * coalesce(season_iso_pctile, 50) +
+        wh[["xba"]] * coalesce(season_xba_pctile, 50) +
+        wh[["exit_velocity"]] * coalesce(season_exit_velocity_pctile, 50)
       ),
       trend_score = (
-        wht[["xwoba"]] * t14_xwoba_pctile +
-        wht[["barrel_pct"]] * t14_barrel_pct_pctile +
-        wht[["hard_hit_pct"]] * t14_hard_hit_pct_pctile +
-        wht[["bb_minus_k_pct"]] * t14_bb_minus_k_pct_pctile +
-        wht[["sb"]] * t14_sb_pctile +
-        wht[["hr"]] * t14_hr_pctile +
-        wht[["iso"]] * t14_iso_pctile +
-        wht[["exit_velocity"]] * t14_exit_velocity_pctile +
-        wht[["ops"]] * t14_ops_pctile
+        wht[["xwoba"]] * coalesce(t14_xwoba_pctile, 50) +
+        wht[["barrel_pct"]] * coalesce(t14_barrel_pct_pctile, 50) +
+        wht[["hard_hit_pct"]] * coalesce(t14_hard_hit_pct_pctile, 50) +
+        wht[["bb_minus_k_pct"]] * coalesce(t14_bb_minus_k_pct_pctile, 50) +
+        wht[["sb"]] * coalesce(t14_sb_pctile, 50) +
+        wht[["hr"]] * coalesce(t14_hr_pctile, 50) +
+        wht[["iso"]] * coalesce(t14_iso_pctile, 50) +
+        wht[["exit_velocity"]] * coalesce(t14_exit_velocity_pctile, 50) +
+        wht[["ops"]] * coalesce(t14_ops_pctile, 50)
       ),
       risk_score = (
-        0.30 * percentile_rank(season_k_pct, FALSE) +
-        0.25 * abs(t14_xwoba_pctile - season_xwoba_pctile) +
-        0.15 * percentile_rank(season_hard_hit_pct, FALSE) +
-        0.15 * percentile_rank(season_bb_pct, FALSE) +
-        0.15 * abs(t14_ops_pctile - season_ops_pctile)
+        0.30 * coalesce(percentile_rank(season_k_pct, FALSE), 50) +
+        0.25 * abs(coalesce(t14_xwoba_pctile, 50) - coalesce(season_xwoba_pctile, 50)) +
+        0.15 * coalesce(percentile_rank(season_hard_hit_pct, FALSE), 50) +
+        0.15 * coalesce(percentile_rank(season_bb_pct, FALSE), 50) +
+        0.15 * abs(coalesce(t14_ops_pctile, 50) - coalesce(season_ops_pctile, 50))
       ),
       bucket = "MLB_H"
     )
@@ -1493,34 +1609,34 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
       core_4_name = "SwStr%",
       core_5_name = "Velocity",
       current_score = (
-        wp[["k_minus_bb_pct"]] * season_k_minus_bb_pct_pctile +
-        wp[["siera"]] * season_siera_pctile +
-        wp[["xfip"]] * season_xfip_pctile +
-        wp[["swstr_pct"]] * season_swstr_pct_pctile +
-        wp[["velocity"]] * season_velocity_pctile +
-        wp[["era"]] * season_era_pctile +
-        wp[["whip"]] * season_whip_pctile +
-        wp[["saves_holds"]] * season_saves_holds_pctile +
-        wp[["hard_hit_pct_against"]] * season_hard_hit_pct_against_pctile +
-        wp[["hr_against"]] * season_hr_against_pctile
+        wp[["k_minus_bb_pct"]] * coalesce(season_k_minus_bb_pct_pctile, 50) +
+        wp[["siera"]] * coalesce(season_siera_pctile, 50) +
+        wp[["xfip"]] * coalesce(season_xfip_pctile, 50) +
+        wp[["swstr_pct"]] * coalesce(season_swstr_pct_pctile, 50) +
+        wp[["velocity"]] * coalesce(season_velocity_pctile, 50) +
+        wp[["era"]] * coalesce(season_era_pctile, 50) +
+        wp[["whip"]] * coalesce(season_whip_pctile, 50) +
+        wp[["saves_holds"]] * coalesce(season_saves_holds_pctile, 50) +
+        wp[["hard_hit_pct_against"]] * coalesce(season_hard_hit_pct_against_pctile, 50) +
+        wp[["hr_against"]] * coalesce(season_hr_against_pctile, 50)
       ),
       trend_score = (
-        wpt[["k_minus_bb_pct"]] * t14_k_minus_bb_pct_pctile +
-        wpt[["swstr_pct"]] * t14_swstr_pct_pctile +
-        wpt[["velocity"]] * t14_velocity_pctile +
-        wpt[["xfip"]] * t14_xfip_pctile +
-        wpt[["siera"]] * t14_siera_pctile +
-        wpt[["era"]] * t14_era_pctile +
-        wpt[["whip"]] * t14_whip_pctile +
-        wpt[["saves_holds"]] * t14_saves_holds_pctile +
-        wpt[["hard_hit_pct_against"]] * t14_hard_hit_pct_against_pctile
+        wpt[["k_minus_bb_pct"]] * coalesce(t14_k_minus_bb_pct_pctile, 50) +
+        wpt[["swstr_pct"]] * coalesce(t14_swstr_pct_pctile, 50) +
+        wpt[["velocity"]] * coalesce(t14_velocity_pctile, 50) +
+        wpt[["xfip"]] * coalesce(t14_xfip_pctile, 50) +
+        wpt[["siera"]] * coalesce(t14_siera_pctile, 50) +
+        wpt[["era"]] * coalesce(t14_era_pctile, 50) +
+        wpt[["whip"]] * coalesce(t14_whip_pctile, 50) +
+        wpt[["saves_holds"]] * coalesce(t14_saves_holds_pctile, 50) +
+        wpt[["hard_hit_pct_against"]] * coalesce(t14_hard_hit_pct_against_pctile, 50)
       ),
       risk_score = (
-        0.30 * percentile_rank(season_bb_pct, TRUE) +
-        0.20 * percentile_rank(season_hard_hit_pct_against, TRUE) +
-        0.15 * percentile_rank(season_hr_against, TRUE) +
-        0.20 * abs(t14_xfip_pctile - season_xfip_pctile) +
-        0.15 * ifelse(season_saves_holds > 0 & season_games > 0 & season_innings < 80, 65, 35)
+        0.30 * coalesce(percentile_rank(season_bb_pct, TRUE), 50) +
+        0.20 * coalesce(percentile_rank(season_hard_hit_pct_against, TRUE), 50) +
+        0.15 * coalesce(percentile_rank(season_hr_against, TRUE), 50) +
+        0.20 * abs(coalesce(t14_xfip_pctile, 50) - coalesce(season_xfip_pctile, 50)) +
+        0.15 * ifelse(coalesce(season_saves_holds, 0) > 0 & coalesce(season_games, 0) > 0 & coalesce(season_innings, 999) < 80, 65, 35)
       ),
       bucket = "MLB_P"
     )
@@ -1545,34 +1661,34 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
       core_4_name = "AgeVsLevel",
       core_5_name = "OBP",
       current_score = (
-        wmh[["wrc_plus"]] * season_wrc_plus_pctile +
-        wmh[["bb_minus_k_pct"]] * season_bb_minus_k_pct_pctile +
-        wmh[["iso"]] * season_iso_pctile +
+        wmh[["wrc_plus"]] * coalesce(season_wrc_plus_pctile, 50) +
+        wmh[["bb_minus_k_pct"]] * coalesce(season_bb_minus_k_pct_pctile, 50) +
+        wmh[["iso"]] * coalesce(season_iso_pctile, 50) +
         wmh[["age_vs_level"]] * 50 +
-        wmh[["obp"]] * season_obp_pctile +
-        wmh[["avg"]] * season_avg_pctile +
-        wmh[["hr"]] * season_hr_pctile +
-        wmh[["steals"]] * season_steals_pctile +
-        wmh[["woba"]] * season_woba_pctile +
-        wmh[["pa"]] * season_pa_pctile
+        wmh[["obp"]] * coalesce(season_obp_pctile, 50) +
+        wmh[["avg"]] * coalesce(season_avg_pctile, 50) +
+        wmh[["hr"]] * coalesce(season_hr_pctile, 50) +
+        wmh[["steals"]] * coalesce(season_steals_pctile, 50) +
+        wmh[["woba"]] * coalesce(season_woba_pctile, 50) +
+        wmh[["pa"]] * coalesce(season_pa_pctile, 50)
       ),
       trend_score = (
-        wmht[["wrc_plus"]] * t14_wrc_plus_pctile +
-        wmht[["iso"]] * t14_iso_pctile +
-        wmht[["bb_minus_k_pct"]] * t14_bb_minus_k_pct_pctile +
-        wmht[["obp"]] * percentile_rank(t14_obp, TRUE) +
+        wmht[["wrc_plus"]] * coalesce(t14_wrc_plus_pctile, 50) +
+        wmht[["iso"]] * coalesce(t14_iso_pctile, 50) +
+        wmht[["bb_minus_k_pct"]] * coalesce(t14_bb_minus_k_pct_pctile, 50) +
+        wmht[["obp"]] * coalesce(percentile_rank(t14_obp, TRUE), 50) +
         wmht[["age_vs_level"]] * 50 +
-        wmht[["hr"]] * t14_hr_pctile +
-        wmht[["steals"]] * t14_steals_pctile +
-        wmht[["avg"]] * t14_avg_pctile +
-        wmht[["pa"]] * t14_pa_pctile
+        wmht[["hr"]] * coalesce(t14_hr_pctile, 50) +
+        wmht[["steals"]] * coalesce(t14_steals_pctile, 50) +
+        wmht[["avg"]] * coalesce(t14_avg_pctile, 50) +
+        wmht[["pa"]] * coalesce(t14_pa_pctile, 50)
       ),
       risk_score = (
-        0.30 * percentile_rank(season_k_pct, TRUE) +
-        0.20 * percentile_rank(season_bb_pct, FALSE) +
-        0.20 * percentile_rank(season_wrc_plus, FALSE) +
+        0.30 * coalesce(percentile_rank(season_k_pct, TRUE), 50) +
+        0.20 * coalesce(percentile_rank(season_bb_pct, FALSE), 50) +
+        0.20 * coalesce(percentile_rank(season_wrc_plus, FALSE), 50) +
         0.15 * 50 +
-        0.15 * percentile_rank(season_pa, FALSE)
+        0.15 * coalesce(percentile_rank(season_pa, FALSE), 50)
       ),
       bucket = "MiLB_H"
     )
@@ -1597,37 +1713,37 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
       core_4_name = "SIERA",
       core_5_name = "Velocity",
       current_score = (
-        wmp[["k_minus_bb_pct"]] * season_k_minus_bb_pct_pctile +
-        wmp[["fip"]] * season_fip_pctile +
-        wmp[["xfip"]] * season_xfip_pctile +
-        wmp[["siera"]] * season_siera_pctile +
-        wmp[["velocity"]] * season_throwing_velocity_pctile +
-        wmp[["whip"]] * season_whip_pctile +
-        wmp[["earned_runs"]] * percentile_rank(season_earned_runs, FALSE) +
-        wmp[["hr"]] * percentile_rank(season_hr, FALSE) +
-        wmp[["holds_plus_saves"]] * season_holds_plus_saves_pctile +
+        wmp[["k_minus_bb_pct"]] * coalesce(season_k_minus_bb_pct_pctile, 50) +
+        wmp[["fip"]] * coalesce(season_fip_pctile, 50) +
+        wmp[["xfip"]] * coalesce(season_xfip_pctile, 50) +
+        wmp[["siera"]] * coalesce(season_siera_pctile, 50) +
+        wmp[["velocity"]] * coalesce(season_throwing_velocity_pctile, 50) +
+        wmp[["whip"]] * coalesce(season_whip_pctile, 50) +
+        wmp[["earned_runs"]] * coalesce(percentile_rank(season_earned_runs, FALSE), 50) +
+        wmp[["hr"]] * coalesce(percentile_rank(season_hr, FALSE), 50) +
+        wmp[["holds_plus_saves"]] * coalesce(season_holds_plus_saves_pctile, 50) +
         wmp[["placeholder"]] * 50
       ),
       trend_score = (
-        wmpt[["k_minus_bb_pct"]] * t14_k_minus_bb_pct_pctile +
-        wmpt[["xfip"]] * t14_xfip_pctile +
-        wmpt[["siera"]] * t14_siera_pctile +
-        wmpt[["velocity"]] * t14_throwing_velocity_pctile +
-        wmpt[["fip"]] * t14_fip_pctile +
-        wmpt[["whip"]] * t14_whip_pctile +
-        wmpt[["earned_runs"]] * percentile_rank(t14_earned_runs, FALSE) +
-        wmpt[["hr"]] * percentile_rank(t14_hr, FALSE) +
+        wmpt[["k_minus_bb_pct"]] * coalesce(t14_k_minus_bb_pct_pctile, 50) +
+        wmpt[["xfip"]] * coalesce(t14_xfip_pctile, 50) +
+        wmpt[["siera"]] * coalesce(t14_siera_pctile, 50) +
+        wmpt[["velocity"]] * coalesce(t14_throwing_velocity_pctile, 50) +
+        wmpt[["fip"]] * coalesce(t14_fip_pctile, 50) +
+        wmpt[["whip"]] * coalesce(t14_whip_pctile, 50) +
+        wmpt[["earned_runs"]] * coalesce(percentile_rank(t14_earned_runs, FALSE), 50) +
+        wmpt[["hr"]] * coalesce(percentile_rank(t14_hr, FALSE), 50) +
         wmpt[["placeholder"]] * 50
       ),
       risk_score = (
-        0.30 * percentile_rank(season_bb_pct, TRUE) +
-        0.20 * percentile_rank(season_hr, TRUE) +
+        0.30 * coalesce(percentile_rank(season_bb_pct, TRUE), 50) +
+        0.20 * coalesce(percentile_rank(season_hr, TRUE), 50) +
         0.20 * rowMeans(cbind(
-          percentile_rank(season_fip, TRUE),
-          percentile_rank(season_xfip, TRUE)
+          coalesce(percentile_rank(season_fip, TRUE), 50),
+          coalesce(percentile_rank(season_xfip, TRUE), 50)
         ), na.rm = TRUE) +
         0.15 * 50 +
-        0.15 * ifelse(season_holds_plus_saves > 0, 55, 45)
+        0.15 * ifelse(coalesce(season_holds_plus_saves, 0) > 0, 55, 45)
       ),
       bucket = "MiLB_P"
     )
@@ -1655,7 +1771,7 @@ compute_asset_scores <- function(asset_df, raw_hitters, raw_pitchers, raw_milb_h
       player_clean = norm_name(player),
       team_clean = norm_name(team)
     ) |>
-    left_join(pool |> select(-player, -team, -mlbid, -fangraphs_id), by = c("player_clean", "team_clean")) |>
+    left_join(pool |> select(-player, -team, -mlbid, -fangraphs_id), by = "player_clean") |>
     mutate(
       prospect_bonus = case_when(level == "MiLB" ~ WAR_PARAMS$prospect_bonus, TRUE ~ WAR_PARAMS$mlb_prospect_bonus),
       future_bonus = case_when(level == "MiLB" ~ WAR_PARAMS$future_bonus_prospect, TRUE ~ WAR_PARAMS$future_bonus_mlb),
@@ -2004,8 +2120,8 @@ main <- function() {
     sum(test_players$role == "P", na.rm = TRUE)
   ))
 
-  raw_hitters <- build_raw_mlb_hitters(test_players)
-  raw_pitchers <- build_raw_mlb_pitchers(test_players)
+  raw_hitters <- build_raw_mlb_hitters(test_players, ldr_ref = bat_leaders)
+  raw_pitchers <- build_raw_mlb_pitchers(test_players, ldr_ref = pitch_leaders)
   raw_milb_hitters <- build_raw_milb_hitters(test_players)
   raw_milb_pitchers <- build_raw_milb_pitchers(test_players)
 
