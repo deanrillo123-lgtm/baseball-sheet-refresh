@@ -314,7 +314,17 @@ LDR_COL_MAP <- c(
   era = "era", whip = "whip", innings = "ip",
   stuff_plus = "sp_stuff",
   hard_hit_pct_against = "hard_hit_percent",
-  saves_holds = "saves_holds", hr_against = "hr"
+  saves_holds = "saves_holds", hr_against = "hr",
+  xera = "xera", games = "g", earned_runs = "er",
+  xfip_minus = "xfip_minus", fip_minus = "fip_minus",
+  # MiLB columns
+  obp = "obp", avg = "avg", pa = "pa",
+  steals = "sb", woba = "woba",
+  age_vs_level = "age_vs_level",
+  throwing_velocity = "f_bv",
+  holds_plus_saves = "saves_holds",
+  bb_pct = "bb_percent", k_pct = "k_percent",
+  wrc_plus = "wrc_plus"
 )
 
 add_percentiles <- function(df, metric_map, ref_df = NULL) {
@@ -332,7 +342,7 @@ add_percentiles <- function(df, metric_map, ref_df = NULL) {
   for (nm in names(metric_map)) {
     if (nm %in% names(out)) {
       stripped <- sub("^(t14_|season_)", "", nm)
-      ldr_col <- LDR_COL_MAP[[stripped]]
+      ldr_col <- if (stripped %in% names(LDR_COL_MAP)) LDR_COL_MAP[[stripped]] else NULL
       if (!is.null(ref_df) && !is.null(ldr_col) && ldr_col %in% names(ref_df) && !grepl("^t14_", nm)) {
         out[[paste0(nm, "_pctile")]] <- percentile_rank_vs_ref(
           out[[nm]], ref_df[[ldr_col]], higher_is_better = metric_map[[nm]]
