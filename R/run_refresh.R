@@ -21,6 +21,16 @@ set_config(user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML
 
 `%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || all(is.na(x))) y else x
 
+# Convert baseball IP notation to true decimal.
+# In baseball, the fractional part represents thirds of an inning:
+#   "182.1" -> 182 + 1/3,  "182.2" -> 182 + 2/3,  "182.0" -> 182.0
+parse_ip <- function(x) {
+  x <- as.numeric(x)
+  whole <- trunc(x)
+  thirds <- round((x - whole) * 10)
+  whole + thirds / 3
+}
+
 # ============================================================
 # SCORING CONFIGURATION
 # Adjust weights below to change how players are scored.
@@ -624,7 +634,7 @@ fetch_alt_pitch_leaders <- function(yr) {
         age = st$age %||% NA_real_,
         g = st$gamesPitched %||% st$gamesPlayed %||% 0,
         gs = st$gamesStarted %||% 0,
-        ip = as.numeric(st$inningsPitched %||% 0),
+        ip = parse_ip(st$inningsPitched %||% 0),
         era = as.numeric(st$era %||% 0),
         whip = as.numeric(st$whip %||% 0),
         so = st$strikeOuts %||% 0,
@@ -636,8 +646,20 @@ fetch_alt_pitch_leaders <- function(yr) {
       )
     }) |> mutate(
       k_percent = ifelse(bf > 0, so / bf, 0),
-      bb_percent = ifelse(bf > 0, bb / bf, 0),
-      fip = ifelse(ip > 0, ((13 * hr) + (3 * bb) - (2 * so)) / ip + 3.2, NA_real_)
+      bb_percent = ifelse(bf > 0, bb / bf, 0)
+    )
+
+    # Calculate FIP using league-derived constant instead of hardcoded 3.2.
+    # FIP constant = lgERA - ((13*lgHR + 3*lgBB - 2*lgSO) / lgIP)
+    lg_era <- weighted.mean(mlb_df$era, mlb_df$ip, na.rm = TRUE)
+    lg_hr  <- sum(mlb_df$hr, na.rm = TRUE)
+    lg_bb  <- sum(mlb_df$bb, na.rm = TRUE)
+    lg_so  <- sum(mlb_df$so, na.rm = TRUE)
+    lg_ip  <- sum(mlb_df$ip, na.rm = TRUE)
+    fip_constant <- if (lg_ip > 0) lg_era - ((13 * lg_hr + 3 * lg_bb - 2 * lg_so) / lg_ip) else 3.2
+    message(sprintf("    FIP constant: %.3f (lgERA=%.3f, lgIP=%.1f)", fip_constant, lg_era, lg_ip))
+    mlb_df <- mlb_df |> mutate(
+      fip = ifelse(ip > 0, ((13 * hr) + (3 * bb) - (2 * so)) / ip + fip_constant, NA_real_)
     )
     message(sprintf("    MLB Stats API: %d pitchers", nrow(mlb_df)))
 
@@ -702,13 +724,8 @@ fetch_alt_pitch_leaders <- function(yr) {
       }
     }
 
-    # Calculate xFIP from FIP components
-    if ("fip" %in% names(mlb_df)) {
-      lg_hr_fb_rate <- 0.10  # league average HR/FB rate
-      mlb_df <- mlb_df |> mutate(
-        x_fip = ifelse(ip > 0, ((13 * lg_hr_fb_rate * bf) + (3 * bb) - (2 * so)) / ip + 3.2, NA_real_)
-      )
-    }
+    # xFIP requires fly ball data which MLB Stats API doesn't provide.
+    # Leave blank rather than calculate with wrong inputs.
 
     mlb_df
   }, error = function(e) { message(sprintf("    Alt pitcher fetch failed: %s", e$message)); tibble() })
