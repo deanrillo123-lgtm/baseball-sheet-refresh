@@ -928,23 +928,39 @@ agg_hitter_logs <- function(logs, start_date = NULL, end_date = NULL) {
   if (!is.null(end_date)) logs <- logs |> filter(gamedate2 <= as.Date(end_date))
   if (nrow(logs) == 0) return(empty_hitter)
 
+  # Sum counting stats
+  t_pa <- sum_or_na(coalesce_col(logs, c("pa")))
+  t_ab <- sum_or_na(coalesce_col(logs, c("ab")))
+  t_h  <- sum_or_na(coalesce_col(logs, c("h")))
+  t_hr <- sum_or_na(coalesce_col(logs, c("hr")))
+  t_so <- sum_or_na(coalesce_col(logs, c("so")))
+  t_bb <- sum_or_na(coalesce_col(logs, c("bb")))
+  t_sb <- sum_or_na(coalesce_col(logs, c("sb")))
+  t_hbp <- sum_or_na(coalesce_col(logs, c("hbp")))
+  t_sf  <- sum_or_na(coalesce_col(logs, c("sf")))
+  t_tb  <- sum_or_na(coalesce_col(logs, c("tb", "total_bases")))
+
+  # Calculate rate stats from totals (not simple averages of per-game rates)
+  calc_avg <- if (!is.na(t_ab) && t_ab > 0) t_h / t_ab else NA_real_
+  denom_obp <- sum(t_ab %||% 0, t_bb %||% 0, t_hbp %||% 0, t_sf %||% 0, na.rm = TRUE)
+  calc_obp <- if (denom_obp > 0) sum(t_h %||% 0, t_bb %||% 0, t_hbp %||% 0) / denom_obp else NA_real_
+  calc_slg <- if (!is.na(t_ab) && t_ab > 0 && !is.na(t_tb)) t_tb / t_ab else NA_real_
+  calc_ops <- sum(calc_obp %||% 0, calc_slg %||% 0, na.rm = FALSE)
+  calc_iso <- if (!is.na(calc_slg) && !is.na(calc_avg)) calc_slg - calc_avg else NA_real_
+  calc_bb_pct <- if (!is.na(t_pa) && t_pa > 0) (t_bb %||% 0) / t_pa else NA_real_
+  calc_k_pct <- if (!is.na(t_pa) && t_pa > 0) (t_so %||% 0) / t_pa else NA_real_
+
   tibble(
     games = sum_or_na(coalesce_col(logs, c("g"))),
-    pa = sum_or_na(coalesce_col(logs, c("pa"))),
-    ab = sum_or_na(coalesce_col(logs, c("ab"))),
-    h = sum_or_na(coalesce_col(logs, c("h"))),
-    hr = sum_or_na(coalesce_col(logs, c("hr"))),
-    so = sum_or_na(coalesce_col(logs, c("so"))),
-    bb = sum_or_na(coalesce_col(logs, c("bb"))),
-    sb = sum_or_na(coalesce_col(logs, c("sb"))),
-    avg = mean_or_na(coalesce_col(logs, c("avg"))),
-    obp = mean_or_na(coalesce_col(logs, c("obp"))),
-    slg = mean_or_na(coalesce_col(logs, c("slg"))),
-    ops = mean_or_na(coalesce_col(logs, c("ops"))),
-    iso = mean_or_na(coalesce_col(logs, c("iso"))),
+    pa = t_pa, ab = t_ab, h = t_h, hr = t_hr, so = t_so, bb = t_bb, sb = t_sb,
+    avg = calc_avg,
+    obp = calc_obp,
+    slg = calc_slg,
+    ops = calc_ops,
+    iso = calc_iso,
     woba = mean_or_na(coalesce_col(logs, c("w_oba", "woba"))),
-    bb_pct = mean_or_na(coalesce_col(logs, c("bb_percent", "bb_pct", "bb%"))),
-    k_pct = mean_or_na(coalesce_col(logs, c("k_percent", "k_pct", "k%"))),
+    bb_pct = calc_bb_pct,
+    k_pct = calc_k_pct,
     wrc_plus = mean_or_na(coalesce_col(logs, c("wrc_plus", "wrc_2", "w_rc_2"))),
     hard_hit_pct = mean_or_na(coalesce_col(logs, c("hard_hit_percent", "hard_percent", "hardhit%", "hard%"))),
     barrel_pct = mean_or_na(coalesce_col(logs, c("barrel_percent", "barrel%", "barrels_per_bbe"))),
@@ -973,22 +989,50 @@ agg_pitcher_logs <- function(logs, start_date = NULL, end_date = NULL) {
   if (!is.null(end_date)) logs <- logs |> filter(gamedate2 <= as.Date(end_date))
   if (nrow(logs) == 0) return(empty_pitcher)
 
+  # Sum counting stats
+  t_ip <- sum_or_na(coalesce_col(logs, c("ip")))
+  # Convert baseball IP notation: sum of per-game IPs in baseball notation
+  # Each game IP is like 6.2 meaning 6 and 2/3. Sum them correctly.
+  raw_ips <- as.numeric(coalesce_col(logs, c("ip")))
+  raw_ips <- raw_ips[!is.na(raw_ips)]
+  if (length(raw_ips) > 0) {
+    thirds <- sum(trunc(raw_ips) * 3 + round((raw_ips - trunc(raw_ips)) * 10))
+    t_ip <- trunc(thirds / 3) + (thirds %% 3) / 10  # back to baseball notation for display
+    t_ip_decimal <- thirds / 3  # true decimal for calculations
+  } else {
+    t_ip <- NA_real_
+    t_ip_decimal <- NA_real_
+  }
+  t_er <- sum_or_na(coalesce_col(logs, c("er")))
+  t_so <- sum_or_na(coalesce_col(logs, c("so")))
+  t_bb <- sum_or_na(coalesce_col(logs, c("bb")))
+  t_hr <- sum_or_na(coalesce_col(logs, c("hr")))
+  t_h  <- sum_or_na(coalesce_col(logs, c("h")))
+  t_bf <- sum_or_na(coalesce_col(logs, c("bf", "tbf", "batters_faced")))
+
+  # Calculate rate stats from totals
+  calc_era <- if (!is.na(t_ip_decimal) && t_ip_decimal > 0 && !is.na(t_er)) (t_er / t_ip_decimal) * 9 else NA_real_
+  calc_whip <- if (!is.na(t_ip_decimal) && t_ip_decimal > 0) ((t_h %||% 0) + (t_bb %||% 0)) / t_ip_decimal else NA_real_
+  calc_k_pct <- if (!is.na(t_bf) && t_bf > 0) (t_so %||% 0) / t_bf else NA_real_
+  calc_bb_pct <- if (!is.na(t_bf) && t_bf > 0) (t_bb %||% 0) / t_bf else NA_real_
+  calc_k_minus_bb <- if (!is.na(calc_k_pct) && !is.na(calc_bb_pct)) calc_k_pct - calc_bb_pct else NA_real_
+
   tibble(
     games = sum_or_na(coalesce_col(logs, c("g"))),
     gs = sum_or_na(coalesce_col(logs, c("gs"))),
-    ip = sum_or_na(coalesce_col(logs, c("ip"))),
-    er = sum_or_na(coalesce_col(logs, c("er"))),
-    so = sum_or_na(coalesce_col(logs, c("so"))),
-    bb = sum_or_na(coalesce_col(logs, c("bb"))),
-    hr = sum_or_na(coalesce_col(logs, c("hr"))),
-    era = mean_or_na(coalesce_col(logs, c("era"))),
-    whip = mean_or_na(coalesce_col(logs, c("whip"))),
+    ip = t_ip,
+    er = t_er,
+    so = t_so,
+    bb = t_bb,
+    hr = t_hr,
+    era = calc_era,
+    whip = calc_whip,
     fip = mean_or_na(coalesce_col(logs, c("fip"))),
     xfip = mean_or_na(coalesce_col(logs, c("xfip"))),
     siera = mean_or_na(coalesce_col(logs, c("siera"))),
-    k_pct = mean_or_na(coalesce_col(logs, c("k_percent", "k_pct", "k%"))),
-    bb_pct = mean_or_na(coalesce_col(logs, c("bb_percent", "bb_pct", "bb%"))),
-    k_minus_bb_pct = mean_or_na(coalesce_col(logs, c("k_bb_percent", "k_minus_bb_pct", "k-bb%"))),
+    k_pct = calc_k_pct,
+    bb_pct = calc_bb_pct,
+    k_minus_bb_pct = calc_k_minus_bb,
     swstr_pct = mean_or_na(coalesce_col(logs, c("sw_str_percent", "swstr_percent", "swstr%"))),
     hard_hit_pct_against = mean_or_na(coalesce_col(logs, c("hard_hit_percent", "hard_percent", "hardhit%", "hard%"))),
     barrel_pct_against = mean_or_na(coalesce_col(logs, c("barrel_percent", "barrel%", "barrels_per_bbe"))),
