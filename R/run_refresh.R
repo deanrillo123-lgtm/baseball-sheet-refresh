@@ -939,13 +939,24 @@ agg_hitter_logs <- function(logs, start_date = NULL, end_date = NULL) {
   t_hbp <- sum_or_na(coalesce_col(logs, c("hbp")))
   t_sf  <- sum_or_na(coalesce_col(logs, c("sf")))
   t_tb  <- sum_or_na(coalesce_col(logs, c("tb", "total_bases")))
+  t_2b  <- sum_or_na(coalesce_col(logs, c("x2b", "doubles")))
+  t_3b  <- sum_or_na(coalesce_col(logs, c("x3b", "triples")))
 
   # Calculate rate stats from totals (not simple averages of per-game rates)
   calc_avg <- if (!is.na(t_ab) && t_ab > 0) t_h / t_ab else NA_real_
   denom_obp <- sum(t_ab %||% 0, t_bb %||% 0, t_hbp %||% 0, t_sf %||% 0, na.rm = TRUE)
   calc_obp <- if (denom_obp > 0) sum(t_h %||% 0, t_bb %||% 0, t_hbp %||% 0) / denom_obp else NA_real_
-  calc_slg <- if (!is.na(t_ab) && t_ab > 0 && !is.na(t_tb)) t_tb / t_ab else NA_real_
-  calc_ops <- sum(calc_obp %||% 0, calc_slg %||% 0, na.rm = FALSE)
+  # SLG from total bases, or calculate from hit components
+  if (!is.na(t_tb) && !is.na(t_ab) && t_ab > 0) {
+    calc_slg <- t_tb / t_ab
+  } else if (!is.na(t_h) && !is.na(t_ab) && t_ab > 0) {
+    singles <- t_h - (t_2b %||% 0) - (t_3b %||% 0) - (t_hr %||% 0)
+    calc_tb <- singles + 2 * (t_2b %||% 0) + 3 * (t_3b %||% 0) + 4 * (t_hr %||% 0)
+    calc_slg <- calc_tb / t_ab
+  } else {
+    calc_slg <- NA_real_
+  }
+  calc_ops <- if (!is.na(calc_obp) && !is.na(calc_slg)) calc_obp + calc_slg else NA_real_
   calc_iso <- if (!is.na(calc_slg) && !is.na(calc_avg)) calc_slg - calc_avg else NA_real_
   calc_bb_pct <- if (!is.na(t_pa) && t_pa > 0) (t_bb %||% 0) / t_pa else NA_real_
   calc_k_pct <- if (!is.na(t_pa) && t_pa > 0) (t_so %||% 0) / t_pa else NA_real_
