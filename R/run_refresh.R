@@ -1007,14 +1007,24 @@ find_in_leaders <- function(ldr, fg_id, mlb_id, player_name) {
   pid_col <- safe_chr(coalesce_col(ldr, c("playerid")))
   # Try FG ID
   row <- ldr[pid_col == safe_chr(fg_id), , drop = FALSE]
-  if (nrow(row) > 0) return(row[1, , drop = FALSE])
+  if (nrow(row) > 0) {
+    message(sprintf("    [ldr] %s matched by FG ID (%s)", player_name, fg_id))
+    return(row[1, , drop = FALSE])
+  }
   # Try MLB ID
   row <- ldr[pid_col == safe_chr(mlb_id), , drop = FALSE]
-  if (nrow(row) > 0) return(row[1, , drop = FALSE])
+  if (nrow(row) > 0) {
+    message(sprintf("    [ldr] %s matched by MLB ID (%s)", player_name, mlb_id))
+    return(row[1, , drop = FALSE])
+  }
   # Try name
   ldr_names <- norm_name(coalesce_col(ldr, c("name", "player_name")))
   row <- ldr[ldr_names == norm_name(player_name), , drop = FALSE]
-  if (nrow(row) > 0) return(row[1, , drop = FALSE])
+  if (nrow(row) > 0) {
+    message(sprintf("    [ldr] %s matched by name", player_name))
+    return(row[1, , drop = FALSE])
+  }
+  message(sprintf("    [ldr] %s NOT FOUND (fg=%s, mlb=%s)", player_name, fg_id, mlb_id))
   ldr[0, , drop = FALSE]
 }
 
@@ -1101,6 +1111,9 @@ build_raw_mlb_hitters <- function(players, ldr_ref = NULL) {
         if (!is.na(ldr_k_pct)) season$k_pct <- season$k_pct %||% ldr_k_pct
         if (!is.na(ldr_age)) season$age <- season$age %||% ldr_age
         if (!is.na(ldr_team) && ldr_team != "") season$team <- season$team %||% ldr_team
+        message(sprintf("    [hitter-fill] %s: avg=%s obp=%s ops=%s (ldr: avg=%s obp=%s ops=%s)",
+          p$player_name[[1]], season$avg, season$obp, season$ops,
+          ldr_avg, ldr_obp, ldr_ops))
       }
 
       tibble(
@@ -1261,6 +1274,9 @@ build_raw_mlb_pitchers <- function(players, ldr_ref = NULL) {
         if (ldr_sh > 0) season$saves_holds <- season$saves_holds %||% ldr_sh
         if (!is.na(ldr_age)) season$age <- season$age %||% ldr_age
         if (!is.na(ldr_team) && ldr_team != "") season$team <- season$team %||% ldr_team
+        message(sprintf("    [pitcher-fill] %s: era=%s whip=%s ip=%s k_pct=%s (ldr: era=%s whip=%s ip=%s)",
+          p$player_name[[1]], season$era, season$whip, season$ip, season$k_pct,
+          ldr_era, ldr_whip, ldr_ip))
       }
 
       tibble(
