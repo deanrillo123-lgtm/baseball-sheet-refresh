@@ -1166,9 +1166,6 @@ build_raw_mlb_hitters <- function(players, ldr_ref = NULL) {
         if (!is.na(ldr_k_pct)) season$k_pct <- season$k_pct %||% ldr_k_pct
         if (!is.na(ldr_age)) season$age <- season$age %||% ldr_age
         if (!is.na(ldr_team) && ldr_team != "") season$team <- season$team %||% ldr_team
-        message(sprintf("    [hitter-fill] %s: avg=%s obp=%s ops=%s (ldr: avg=%s obp=%s ops=%s)",
-          p$player_name[[1]], season$avg, season$obp, season$ops,
-          ldr_avg, ldr_obp, ldr_ops))
       }
 
       tibble(
@@ -1329,9 +1326,6 @@ build_raw_mlb_pitchers <- function(players, ldr_ref = NULL) {
         if (ldr_sh > 0) season$saves_holds <- season$saves_holds %||% ldr_sh
         if (!is.na(ldr_age)) season$age <- season$age %||% ldr_age
         if (!is.na(ldr_team) && ldr_team != "") season$team <- season$team %||% ldr_team
-        message(sprintf("    [pitcher-fill] %s: era=%s whip=%s ip=%s k_pct=%s (ldr: era=%s whip=%s ip=%s)",
-          p$player_name[[1]], season$era, season$whip, season$ip, season$k_pct,
-          ldr_era, ldr_whip, ldr_ip))
       }
 
       tibble(
