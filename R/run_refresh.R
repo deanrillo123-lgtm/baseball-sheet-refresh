@@ -1436,7 +1436,7 @@ build_raw_milb_hitters <- function(players) {
           milb_resp <- tryCatch(GET(milb_url), error = function(e) NULL)
           if (!is.null(milb_resp) && status_code(milb_resp) == 200) {
             milb_data <- content(milb_resp, as = "parsed")
-            splits <- milb_data$stats[[1]]$splits
+            splits <- if (length(milb_data$stats) > 0) milb_data$stats[[1]]$splits else list()
             if (length(splits) > 0) {
               st <- splits[[1]]$stat
               season$avg <- season$avg %||% as.numeric(st$avg %||% NA)
@@ -1572,7 +1572,7 @@ build_raw_milb_pitchers <- function(players) {
           milb_resp <- tryCatch(GET(milb_url), error = function(e) NULL)
           if (!is.null(milb_resp) && status_code(milb_resp) == 200) {
             milb_data <- content(milb_resp, as = "parsed")
-            splits <- milb_data$stats[[1]]$splits
+            splits <- if (length(milb_data$stats) > 0) milb_data$stats[[1]]$splits else list()
             if (length(splits) > 0) {
               st <- splits[[1]]$stat
               milb_ip <- parse_ip(st$inningsPitched %||% 0)
