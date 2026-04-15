@@ -1428,6 +1428,42 @@ build_raw_milb_hitters <- function(players) {
       t14 <- agg_hitter_logs(logs, t14_start, t14_end)
       season <- agg_hitter_logs(logs)
 
+      # MLB Stats API fallback for MiLB hitters when FG game logs are empty
+      if (is.na(season$avg) && !is.na(p$mlbid[[1]])) {
+        for (sid in c(11, 12, 13, 14)) {
+          milb_url <- sprintf("https://statsapi.mlb.com/api/v1/people/%s/stats?stats=season&season=%d&group=hitting&sportId=%d",
+            p$mlbid[[1]], season_year, sid)
+          milb_resp <- tryCatch(GET(milb_url), error = function(e) NULL)
+          if (!is.null(milb_resp) && status_code(milb_resp) == 200) {
+            milb_data <- content(milb_resp, as = "parsed")
+            splits <- milb_data$stats[[1]]$splits
+            if (length(splits) > 0) {
+              st <- splits[[1]]$stat
+              season$avg <- season$avg %||% as.numeric(st$avg %||% NA)
+              season$obp <- season$obp %||% as.numeric(st$obp %||% NA)
+              season$slg <- season$slg %||% as.numeric(st$slg %||% NA)
+              season$ops <- season$ops %||% as.numeric(st$ops %||% NA)
+              season$iso <- if (!is.na(season$slg) && !is.na(season$avg)) season$slg - season$avg else NA_real_
+              season$pa <- season$pa %||% (st$plateAppearances %||% NA)
+              season$ab <- season$ab %||% (st$atBats %||% NA)
+              season$h <- season$h %||% (st$hits %||% NA)
+              season$hr <- season$hr %||% (st$homeRuns %||% NA)
+              season$bb <- season$bb %||% (st$baseOnBalls %||% NA)
+              season$so <- season$so %||% (st$strikeOuts %||% NA)
+              season$sb <- season$sb %||% (st$stolenBases %||% NA)
+              season$games <- season$games %||% (st$gamesPlayed %||% NA)
+              t_pa <- st$plateAppearances %||% 0
+              if (t_pa > 0) {
+                season$bb_pct <- season$bb_pct %||% ((st$baseOnBalls %||% 0) / t_pa)
+                season$k_pct <- season$k_pct %||% ((st$strikeOuts %||% 0) / t_pa)
+              }
+              message(sprintf("    [milb-api] %s: AVG=%s OBP=%s (sportId=%d)", p$player_name[[1]], st$avg, st$obp, sid))
+              break
+            }
+          }
+        }
+      }
+
       tibble(
         name = p$player_name[[1]],
         team = season$team %||% p$team[[1]],
@@ -1527,6 +1563,42 @@ build_raw_milb_pitchers <- function(players) {
       logs <- if (fg_ok) safe_fg_milb_pitcher_logs(p$fangraphs_id[[1]], season_year) else tibble()
       t14 <- agg_pitcher_logs(logs, t14_start, t14_end)
       season <- agg_pitcher_logs(logs)
+
+      # MLB Stats API fallback for MiLB pitchers when FG game logs are empty
+      if (is.na(season$era) && !is.na(p$mlbid[[1]])) {
+        for (sid in c(11, 12, 13, 14)) {
+          milb_url <- sprintf("https://statsapi.mlb.com/api/v1/people/%s/stats?stats=season&season=%d&group=pitching&sportId=%d",
+            p$mlbid[[1]], season_year, sid)
+          milb_resp <- tryCatch(GET(milb_url), error = function(e) NULL)
+          if (!is.null(milb_resp) && status_code(milb_resp) == 200) {
+            milb_data <- content(milb_resp, as = "parsed")
+            splits <- milb_data$stats[[1]]$splits
+            if (length(splits) > 0) {
+              st <- splits[[1]]$stat
+              milb_ip <- parse_ip(st$inningsPitched %||% 0)
+              season$era <- season$era %||% as.numeric(st$era %||% NA)
+              season$whip <- season$whip %||% as.numeric(st$whip %||% NA)
+              season$ip <- season$ip %||% as.numeric(st$inningsPitched %||% NA)
+              season$games <- season$games %||% (st$gamesPitched %||% NA)
+              season$gs <- season$gs %||% (st$gamesStarted %||% NA)
+              season$so <- season$so %||% (st$strikeOuts %||% NA)
+              season$bb <- season$bb %||% (st$baseOnBalls %||% NA)
+              season$hr <- season$hr %||% (st$homeRuns %||% NA)
+              season$er <- season$er %||% (st$earnedRuns %||% NA)
+              t_bf <- st$battersFaced %||% 0
+              if (t_bf > 0) {
+                season$k_pct <- season$k_pct %||% ((st$strikeOuts %||% 0) / t_bf)
+                season$bb_pct <- season$bb_pct %||% ((st$baseOnBalls %||% 0) / t_bf)
+              }
+              if (milb_ip > 0) {
+                season$fip <- season$fip %||% (((13 * (st$homeRuns %||% 0)) + (3 * (st$baseOnBalls %||% 0)) - (2 * (st$strikeOuts %||% 0))) / milb_ip + 3.2)
+              }
+              message(sprintf("    [milb-api] %s: ERA=%s IP=%s (sportId=%d)", p$player_name[[1]], st$era, st$inningsPitched, sid))
+              break
+            }
+          }
+        }
+      }
 
       tibble(
         name = p$player_name[[1]],
