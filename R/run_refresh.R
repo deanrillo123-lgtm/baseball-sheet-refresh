@@ -910,7 +910,18 @@ resolve_player_ids <- function(df) {
     ) |>
     select(-fg_ref, -mlb_ref, -age_ref, -pos_ref)
 
-  bind_rows(joined_bat, joined_pitch)
+  result <- bind_rows(joined_bat, joined_pitch)
+  level_counts <- table(result$level, useNA = "ifany")
+  message(sprintf("  Level distribution: %s", paste(names(level_counts), level_counts, sep = "=", collapse = ", ")))
+  role_counts <- table(result$role, useNA = "ifany")
+  message(sprintf("  Role distribution: %s", paste(names(role_counts), role_counts, sep = "=", collapse = ", ")))
+  # Log players with unexpected/missing levels
+  bad_level <- result |> filter(is.na(level) | !level %in% c("MLB", "MiLB"))
+  if (nrow(bad_level) > 0) {
+    message(sprintf("  WARNING: %d players with unexpected level: %s",
+      nrow(bad_level), paste(sprintf("%s(level=%s)", bad_level$player_name, bad_level$level), collapse = ", ")))
+  }
+  result
 }
 
 agg_hitter_logs <- function(logs, start_date = NULL, end_date = NULL) {
