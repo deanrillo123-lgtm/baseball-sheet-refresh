@@ -1018,15 +1018,18 @@ agg_pitcher_logs <- function(logs, start_date = NULL, end_date = NULL) {
   if (nrow(logs) == 0) return(empty_pitcher)
 
   # Sum counting stats
-  t_ip <- sum_or_na(coalesce_col(logs, c("ip")))
-  # Convert baseball IP notation: sum of per-game IPs in baseball notation
-  # Each game IP is like 6.2 meaning 6 and 2/3. Sum them correctly.
+  # FG game logs return IP in baseball notation (e.g., 5.2 = 5 and 2/3 innings).
+  # Convert each game's IP to true decimal, sum, then output as true decimal so
+  # downstream spreadsheet formulas (ER/IP*9 etc) work correctly.
   raw_ips <- as.numeric(coalesce_col(logs, c("ip")))
   raw_ips <- raw_ips[!is.na(raw_ips)]
   if (length(raw_ips) > 0) {
-    thirds <- sum(trunc(raw_ips) * 3 + round((raw_ips - trunc(raw_ips)) * 10))
-    t_ip <- trunc(thirds / 3) + (thirds %% 3) / 10  # back to baseball notation for display
-    t_ip_decimal <- thirds / 3  # true decimal for calculations
+    # Each IP value: take whole innings + (fractional digit / 3)
+    # Cap fractional digit at 2 since baseball notation only uses .0/.1/.2
+    frac_digit <- pmin(round((raw_ips - trunc(raw_ips)) * 10), 2)
+    decimal_ips <- trunc(raw_ips) + frac_digit / 3
+    t_ip_decimal <- sum(decimal_ips)
+    t_ip <- round(t_ip_decimal, 2)  # output true decimal for sheet
   } else {
     t_ip <- NA_real_
     t_ip_decimal <- NA_real_
@@ -1595,7 +1598,7 @@ build_raw_milb_pitchers <- function(players) {
               milb_ip <- parse_ip(st$inningsPitched %||% 0)
               season$era <- season$era %||% as.numeric(st$era %||% NA)
               season$whip <- season$whip %||% as.numeric(st$whip %||% NA)
-              season$ip <- season$ip %||% as.numeric(st$inningsPitched %||% NA)
+              season$ip <- season$ip %||% milb_ip
               season$games <- season$games %||% (st$gamesPitched %||% NA)
               season$gs <- season$gs %||% (st$gamesStarted %||% NA)
               season$so <- season$so %||% (st$strikeOuts %||% NA)
